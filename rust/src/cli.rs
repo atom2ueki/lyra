@@ -14,8 +14,8 @@ use crate::config::{ensure_config, load_config, lyra_home};
 use crate::graph::{to_dot, to_json, to_mermaid};
 use crate::import::import_omp_kanban;
 use crate::models::{
-    ensure_model_policy, load_model_catalog, load_policy, load_usage, model_policy_path,
-    select_model,
+    ensure_model_policy, load_model_catalog, load_policy, load_stats, load_usage,
+    model_policy_path, select_model,
 };
 use crate::pane::{
     PaneBackend, ghostty::GhosttyBackend, headless::HeadlessBackend, herdr::HerdrBackend,
@@ -91,6 +91,16 @@ enum Command {
         run: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    Upgrade {
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        repo: Option<String>,
     },
     Doctor,
 }
@@ -710,6 +720,7 @@ pub fn run() -> Result<()> {
             let policy = load_policy()?;
             let models = load_model_catalog().unwrap_or_default();
             let usage = load_usage().unwrap_or_default();
+            let stats = load_stats().unwrap_or_default();
             let mut selections = HashMap::new();
             for name in policy.classes.keys() {
                 let selected = select_model(
@@ -731,11 +742,13 @@ pub fn run() -> Result<()> {
                         "policy": policy,
                         "selections": selections,
                         "modelCount": models.len(),
+                        "stats": stats,
                     }))?
                 );
             } else {
                 println!("Policy:   {}", model_policy_path().display());
                 println!("Models:   {} available", models.len());
+                println!("Stats:    {} model observations", stats.len());
                 println!("Classes:");
                 let mut classes: Vec<_> = selections.iter().collect();
                 classes.sort_by_key(|(name, _)| *name);
@@ -797,6 +810,19 @@ pub fn run() -> Result<()> {
             let context = resolve_store(None, None)?;
             let state = load_state(&resolve_run_dir(&context.root, run)?)?;
             print_run(&state, json)?;
+        }
+        Some(Command::Upgrade {
+            check,
+            force,
+            version,
+            repo,
+        }) => {
+            crate::upgrade::run(crate::upgrade::UpgradeOptions {
+                check,
+                force,
+                version,
+                repo,
+            })?;
         }
         Some(Command::Doctor) => {
             let code = run_doctor()?;

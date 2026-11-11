@@ -25,19 +25,39 @@ Implemented through **P3 + P5** (P4 RPC mode is optional/deferred):
 
 No board UI, no native terminal. Those are non-goals for the current product.
 
-## Build
+## Install
+
+Release builds are macOS Apple Silicon and Linux (x86_64/arm64) binaries.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/atom2ueki/lyra/main/install.sh | sh
+lyra --version
+lyra upgrade
+```
+
+The installer uses `~/.local/bin` by default and verifies the release `SHA256SUMS` before replacing
+the binary. Override with `LYRA_INSTALL_DIR`, pin a tag with `LYRA_VERSION=0.1.0`, or use
+`LYRA_GITHUB_TOKEN` for a private repository. The repository currently needs to be public for the
+unauthenticated `curl | sh` form; an authenticated private install is:
+
+```sh
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/atom2ueki/lyra/main/install.sh \
+  | LYRA_GITHUB_TOKEN="$GITHUB_TOKEN" sh
+```
+
+From source:
 
 ```sh
 cd rust
 cargo build --release
 # binary is rust/target/release/lyra
+cargo install --path .
 ```
 
-Install it on `PATH` (or point `LYRA_BIN`/the OMP adapter at the release binary):
-
-```sh
-cargo install --path rust
-```
+`lyra upgrade` downloads the latest release asset for the current platform, verifies its checksum,
+and atomically replaces the running binary. Use `lyra upgrade --check` to inspect the available
+version, `--force` to reinstall the same version, or `--version 0.1.0` to pin a release.
 
 ## Usage
 

@@ -14,3 +14,5 @@ pub mod worktree;
 
 pub mod conductor;
 pub mod shell;
+
+pub mod upgrade;

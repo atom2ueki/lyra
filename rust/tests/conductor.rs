@@ -664,3 +664,142 @@ fn provider_cap_overflows_to_the_next_candidate() {
     assert_eq!(dgx, 2);
     assert_eq!(other, 2);
 }
+
+#[derive(Default)]
+struct RecordingBackend {
+    env: Mutex<HashMap<String, String>>,
+    started: Mutex<Vec<String>>,
+}
+
+impl lyra::pane::PaneBackend for RecordingBackend {
+    fn name(&self) -> &str {
+        "recording"
+    }
+
+    fn capabilities(&self) -> lyra::pane::Capabilities {
+        lyra::pane::Capabilities {
+            splits: true,
+            start_agent: true,
+            send_text: true,
+            close: true,
+            ..lyra::pane::Capabilities::default()
+        }
+    }
+
+    fn anchor(&self) -> anyhow::Result<lyra::pane::PaneHandle> {
+        Ok(lyra::pane::PaneHandle {
+            backend: "recording".to_string(),
+            pane: "anchor".to_string(),
+            ..Default::default()
+        })
+    }
+
+    fn split(
+        &self,
+        _anchor: &lyra::pane::PaneHandle,
+        options: &lyra::pane::SplitOptions,
+    ) -> anyhow::Result<lyra::pane::PaneHandle> {
+        *self.env.lock().unwrap() = options.env.clone();
+        Ok(lyra::pane::PaneHandle {
+            backend: "recording".to_string(),
+            pane: "worker".to_string(),
+            ..Default::default()
+        })
+    }
+
+    fn start_agent(
+        &self,
+        _pane: &lyra::pane::PaneHandle,
+        options: &lyra::pane::StartAgentOptions,
+    ) -> anyhow::Result<()> {
+        self.started.lock().unwrap().push(options.kind.clone());
+        Ok(())
+    }
+
+    fn send_text(
+        &self,
+        _pane: &lyra::pane::PaneHandle,
+        _text: &str,
+        _submit: bool,
+    ) -> anyhow::Result<()> {
+        let config_path = self
+            .env
+            .lock()
+            .unwrap()
+            .get("LYRA_WORKER_CONFIG")
+            .cloned()
+            .unwrap();
+        let worker_dir = Path::new(&config_path).parent().unwrap();
+        fs::write(
+            worker_dir.join("RESULT.md"),
+            "status: done\nsummary: cross-agent result\nverification: fake test\nblockers:\n",
+        )
+        .unwrap();
+        Ok(())
+    }
+
+    fn close(&self, _pane: &lyra::pane::PaneHandle) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn non_omp_harness_uses_result_md_fallback() {
+    let _guard = lock_env();
+    let dir = repo();
+    let store = dir.path().join(".lyra/store");
+    ensure_store(&store).unwrap();
+    let ticket = create_ticket(
+        &store,
+        NewTicket {
+            project_id: "test-project".to_string(),
+            subject: "Cross agent".to_string(),
+            prompt: "Do cross-agent work.".to_string(),
+            blocked_by: Vec::new(),
+            priority: 2,
+            labels: Vec::new(),
+            model_class: None,
+            acceptance: None,
+            plan: None,
+            parent: None,
+            origin: Some("test".to_string()),
+            harness: Some("codex".to_string()),
+        },
+    )
+    .unwrap();
+    let backend = RecordingBackend::default();
+    let started = start_run(StartOptions {
+        repo: dir.path().to_path_buf(),
+        store: store.clone(),
+        project_id: "test-project".to_string(),
+        config: LyraConfig {
+            max_parallel: 1,
+            max_per_provider: HashMap::new(),
+            approval_posture: ApprovalPosture::Ask,
+            merge: MergeMode::Auto,
+        },
+        backend: Some(Box::new(backend)),
+        max_parallel: None,
+        max_seconds: Some(10),
+        ticket_id: None,
+        base_ref: None,
+        dry_run: false,
+        run_id: Some("run-cross-agent".to_string()),
+        model_policy: None,
+        models: Some(Vec::new()),
+        usage: Some(Vec::new()),
+    })
+    .unwrap();
+    assert_eq!(started.tickets[&ticket.id].status, RunTicketStatus::Running);
+    let state = monitor_run(MonitorOptions {
+        run_dir: run_dir_for(dir.path(), "run-cross-agent"),
+        backend: Some(Box::new(HeadlessBackend::new())),
+        once: false,
+        interval_ms: 25,
+        timeout_ms: Some(5000),
+        max_parallel: None,
+    })
+    .unwrap();
+    assert_eq!(state.tickets[&ticket.id].status, RunTicketStatus::Done);
+    assert_eq!(list_tickets(&store).unwrap()[0].status, TicketStatus::Done);
+}
