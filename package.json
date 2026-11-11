@@ -1,0 +1,19 @@
+{
+  "name": "@atom2ueki/lyra",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Lyra — supervised task conductor for coding agents",
+  "bin": {
+    "lyra": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "dev": "bun run src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.4",
+    "typescript": "^5.9.3"
+  }
+}
