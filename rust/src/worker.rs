@@ -9,7 +9,7 @@ use crate::config::ApprovalPosture;
 use crate::schema::{Ticket, now_iso};
 use crate::worktree::safe_segment;
 
-pub const WORKER_EXTENSION_SOURCE: &str = include_str!("../../extensions/lyra-worker.mjs");
+pub const WORKER_EXTENSION_SOURCE: &str = include_str!("lyra-worker.mjs");
 
 #[derive(Debug, Clone)]
 pub struct WorkerPaths {

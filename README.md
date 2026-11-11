@@ -6,7 +6,7 @@ Lyra is a supervised task conductor for coding agents. It keeps the task graph i
 schedules ready work into agent panes, and records results as files — not as a chat transcript.
 
 The core scheduler, store, pane adapters, worktree handling, and model routing are **Rust**
-(`rust/`). The only JavaScript is the OMP worker extension (`extensions/lyra-worker.mjs`), which is
+(`rust/`). The only JavaScript is the OMP worker extension (`rust/src/lyra-worker.mjs`), which is
 embedded into the Rust binary and loaded into each OMP worker with `-e`.
 
 Implemented through **P3 + P5** (P4 RPC mode is optional/deferred):
