@@ -34,7 +34,7 @@ export default function lyraOmpExtension(pi) {
     handler: async (args, ctx) => {
       const argv = String(args ?? "").trim().split(/\s+/).filter(Boolean);
       if (argv.length === 0) {
-        ctx.ui?.notify?.("usage: /lyra status|start|monitor|resume|stop|report|close|graph|models|doctor", "info");
+        ctx.ui?.notify?.("usage: /lyra status|start|monitor|resume|stop|report|close|graph|models|doctor|upgrade", "info");
         return;
       }
       const result = await run(argv, ctx?.cwd, ctx);
@@ -49,7 +49,7 @@ export default function lyraOmpExtension(pi) {
     label: "Lyra conductor",
     description: "Read Lyra status or run its conductor commands. The standalone lyra CLI owns the task graph; this tool does not edit tickets directly.",
     parameters: z.object({
-      command: z.enum(["status", "start", "monitor", "resume", "stop", "report", "close", "graph", "models", "doctor"]),
+      command: z.enum(["status", "start", "monitor", "resume", "stop", "report", "close", "graph", "models", "doctor", "upgrade"]),
       args: z.array(z.string()).optional().describe("Extra CLI arguments, e.g. [\"--max\",\"2\"]"),
       cwd: z.string().optional().describe("Project directory (defaults to the session cwd)"),
     }),

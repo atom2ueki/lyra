@@ -1,6 +1,6 @@
 ---
 name: lyra
-description: "Run the Lyra task conductor from an OMP session: status, start, monitor, resume, report, stop, close, graph, models, doctor. Use when the user asks to run or inspect a Lyra run, or to hand work to independent worker sessions. Lyra owns the task graph; do not edit ticket files directly."
+description: "Run the Lyra task conductor from an OMP session: status, start, monitor, resume, report, stop, close, graph, models, doctor, upgrade. Use when the user asks to run or inspect a Lyra run, or to hand work to independent worker sessions. Lyra owns the task graph; do not edit ticket files directly."
 ---
 
 # Lyra
@@ -21,6 +21,7 @@ the ticket store, worktrees, workers, and state.
 /lyra graph --format mermaid # static task-graph projection
 /lyra models                 # model classes and current selections
 /lyra doctor                 # preflight
+/lyra upgrade                # self-update from the latest release
 ```
 
 The model-callable tool is `lyra_conduct` with the same command names.

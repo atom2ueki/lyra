@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -61,6 +62,13 @@ fn curl_text(url: &str) -> Result<String> {
 
 fn curl_download(url: &str, destination: &Path) -> Result<()> {
     let mut args = curl_args(url);
+    if url.contains("/releases/assets/") {
+        args.insert(args.len() - 1, "-H".to_string());
+        args.insert(
+            args.len() - 1,
+            "Accept: application/octet-stream".to_string(),
+        );
+    }
     let output_index = args.len() - 1;
     args.insert(output_index, "-o".to_string());
     args.insert(output_index + 1, destination.display().to_string());
@@ -91,6 +99,27 @@ fn latest_tag(repo: &str) -> Result<String> {
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+fn release_assets(repo: &str, tag: Option<&str>) -> Result<HashMap<String, String>> {
+    let url = match tag {
+        Some(tag) => format!("https://api.github.com/repos/{repo}/releases/tags/{tag}"),
+        None => format!("https://api.github.com/repos/{repo}/releases/latest"),
+    };
+    let body = curl_text(&url)?;
+    let value: Value = serde_json::from_str(&body).context("parse GitHub release response")?;
+    let mut assets = HashMap::new();
+    if let Some(items) = value.get("assets").and_then(Value::as_array) {
+        for item in items {
+            if let (Some(name), Some(url)) = (
+                item.get("name").and_then(Value::as_str),
+                item.get("url").and_then(Value::as_str),
+            ) {
+                assets.insert(name.to_string(), url.to_string());
+            }
+        }
+    }
+    Ok(assets)
 }
 
 fn target_asset() -> Result<(&'static str, &'static str)> {
@@ -230,6 +259,7 @@ pub fn run(options: UpgradeOptions) -> Result<()> {
         None if releases_url.is_some() => None,
         None => Some(latest_tag(&repo)?),
     };
+    let has_releases_url = releases_url.is_some();
     let base = if let Some(base) = releases_url {
         base
     } else if let Some(tag) = &tag {
@@ -261,9 +291,24 @@ pub fn run(options: UpgradeOptions) -> Result<()> {
     fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
     let archive = staging.join(asset);
     let checksums_path = staging.join("SHA256SUMS");
+    let api_assets = if !has_releases_url && token().is_some() {
+        Some(release_assets(&repo, tag.as_deref())?)
+    } else {
+        None
+    };
+    let asset_url = api_assets
+        .as_ref()
+        .and_then(|assets| assets.get(asset))
+        .cloned()
+        .unwrap_or_else(|| format!("{base}/{asset}"));
+    let checksums_url = api_assets
+        .as_ref()
+        .and_then(|assets| assets.get("SHA256SUMS"))
+        .cloned()
+        .unwrap_or_else(|| format!("{base}/SHA256SUMS"));
     let result = (|| -> Result<()> {
-        curl_download(&format!("{base}/{asset}"), &archive)?;
-        curl_download(&format!("{base}/SHA256SUMS"), &checksums_path)?;
+        curl_download(&asset_url, &archive)?;
+        curl_download(&checksums_url, &checksums_path)?;
         let checksums = fs::read_to_string(&checksums_path).context("read SHA256SUMS")?;
         let expected = expected_checksum(&checksums, asset)
             .ok_or_else(|| anyhow::anyhow!("SHA256SUMS has no entry for {asset}"))?;

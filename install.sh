@@ -35,19 +35,30 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fetch() {
-  if [ -n "$token" ]; then
-    curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
-      --connect-timeout 10 --max-time 300 \
-      -H "Authorization: Bearer $token" "$1" -o "$2"
+curl_fetch() {
+  curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
+    --connect-timeout 10 --max-time 300 "$1" -o "$2"
+}
+
+fetch_private_asset() {
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "private repository install needs gh; install gh or set LYRA_RELEASES_URL" >&2
+    exit 1
+  fi
+  if [ -n "$version" ]; then
+    GH_TOKEN="$token" gh release download "$version" --repo "$repo" --pattern "$1" --dir "$tmp" --clobber
   else
-    curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
-      --connect-timeout 10 --max-time 300 "$1" -o "$2"
+    GH_TOKEN="$token" gh release download --repo "$repo" --pattern "$1" --dir "$tmp" --clobber
   fi
 }
 
-fetch "$base/$asset" "$tmp/$asset"
-fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS"
+if [ -n "$token" ] && [ -z "${LYRA_RELEASES_URL:-}" ]; then
+  fetch_private_asset "$asset"
+  fetch_private_asset "SHA256SUMS"
+else
+  curl_fetch "$base/$asset" "$tmp/$asset"
+  curl_fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS"
+fi
 expected=$(awk -v f="$asset" '$2 == f || $2 == "*" f { print $1; exit }' "$tmp/SHA256SUMS")
 if [ -z "$expected" ]; then
   echo "no checksum for $asset in SHA256SUMS; not installing" >&2
