@@ -1,5 +1,7 @@
 # Lyra
 
+Private repository: <https://github.com/atom2ueki/lyra>
+
 Lyra is a supervised task conductor for coding agents. It keeps the task graph in a local store,
 schedules ready work into agent panes, and records results as files — not as a chat transcript.
 

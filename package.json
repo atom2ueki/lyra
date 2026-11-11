@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "description": "Lyra — supervised task conductor for coding agents",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/atom2ueki/lyra.git"
+  },
   "bin": {
     "lyra": "./src/cli.ts"
   },
