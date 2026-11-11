@@ -1,6 +1,6 @@
 # Releasing Lyra
 
-Tags use the bare version, e.g. `0.1.0` (no `v` prefix).
+Tags use the bare version, e.g. `0.1.1` (no `v` prefix).
 
 ## 1. Bump the version
 
@@ -14,9 +14,9 @@ cargo build --release
 Commit the version bump, then tag and push:
 
 ```sh
-git tag 0.1.0
+git tag 0.1.1
 git push origin main
-git push origin 0.1.0
+git push origin 0.1.1
 ```
 
 The `release` workflow builds the Linux x86_64 and Linux arm64 archives, writes `SHA256SUMS`, and
@@ -41,17 +41,17 @@ file:
 
 ```sh
 mkdir -p dist/linux
-gh release download 0.1.0 --dir dist/linux --pattern '*.tar.gz'
+gh release download 0.1.1 --dir dist/linux --pattern '*.tar.gz'
 cp dist/lyra-aarch64-apple-darwin.tar.gz dist/linux/
 (cd dist/linux && sha256sum lyra-*.tar.gz > SHA256SUMS)
-gh release upload 0.1.0 dist/lyra-aarch64-apple-darwin.tar.gz --clobber
-gh release upload 0.1.0 dist/linux/SHA256SUMS --clobber
+gh release upload 0.1.1 dist/lyra-aarch64-apple-darwin.tar.gz --clobber
+gh release upload 0.1.1 dist/linux/SHA256SUMS --clobber
 ```
 
 ## 3. Verify the public surface
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/atom2ueki/lyra/main/install.sh | sh
 lyra --version
 lyra upgrade --check
 ```
