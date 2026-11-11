@@ -19,8 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            target: aarch64-apple-darwin
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04
@@ -58,8 +56,38 @@ jobs:
           path: dist/lyra-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
+  build-macos:
+    # GitHub-hosted macOS minutes are not available to every private repository.
+    # Enable this job once a macOS runner is attached to the repository.
+    if: vars.ENABLE_MACOS_RUNNER == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        working-directory: rust
+        run: |
+          cargo build --release --locked
+          mkdir -p ../dist/pkg
+          cp target/release/lyra ../dist/pkg/lyra
+          tar -czf "../dist/lyra-aarch64-apple-darwin.tar.gz" -C ../dist/pkg lyra
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-aarch64-apple-darwin
+          path: dist/lyra-aarch64-apple-darwin.tar.gz
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, build-macos]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
