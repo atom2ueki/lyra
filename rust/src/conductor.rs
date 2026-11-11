@@ -740,7 +740,7 @@ fn process_requests(state: &RunState, ticket_id: &str) -> Result<()> {
                     blocked_by: Vec::new(),
                     priority: crate::schema::PRIORITY_DEFAULT,
                     labels: Vec::new(),
-                    model_class: None,
+                    model_class: Some("architecture".to_string()),
                     acceptance: None,
                     plan: None,
                     parent: Some(ticket_id.to_string()),

@@ -365,6 +365,8 @@ fn conductor_schedules_a_four_ticket_dag_two_at_a_time() {
         .filter(|ticket| ticket.status == RunTicketStatus::Running)
         .count();
     assert_eq!(running, 2);
+    assert!(!started.tickets.contains_key(&ids[2]));
+    assert!(!started.tickets.contains_key(&ids[3]));
     let state = monitor_run(MonitorOptions {
         run_dir: run_dir_for(dir.path(), "run-dag"),
         backend: Some(Box::new(HeadlessBackend::new())),
