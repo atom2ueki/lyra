@@ -1,6 +1,4 @@
-use lyra::schema::{
-    ready_tickets, validate_graph, Ticket, TicketStatus, PRIORITY_DEFAULT,
-};
+use lyra::schema::{PRIORITY_DEFAULT, Ticket, TicketStatus, ready_tickets, validate_graph};
 
 fn ticket(id: &str) -> Ticket {
     Ticket::new(
@@ -50,7 +48,10 @@ fn ready_tickets_respect_dependencies_and_priority() {
     third.priority = 0;
     let tickets = [first, second, third];
     let ready = ready_tickets(&tickets);
-    assert_eq!(ready.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["T-003", "T-002"]);
+    assert_eq!(
+        ready.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec!["T-003", "T-002"]
+    );
     assert_eq!(tickets[2].priority, 0);
     assert_eq!(PRIORITY_DEFAULT, 2);
 }

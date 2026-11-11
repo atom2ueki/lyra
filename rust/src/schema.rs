@@ -295,14 +295,20 @@ pub fn validate_graph(tickets: &[Ticket]) -> Vec<String> {
     if project_ids.len() > 1 {
         let mut ids: Vec<&str> = project_ids.into_iter().collect();
         ids.sort_unstable();
-        errors.push(format!("mixed project ids in one store: {}", ids.join(", ")));
+        errors.push(format!(
+            "mixed project ids in one store: {}",
+            ids.join(", ")
+        ));
     }
 
     let by_id: HashMap<&str, &Ticket> = tickets.iter().map(|t| (t.id.as_str(), t)).collect();
     for ticket in tickets {
         for blocker in &ticket.blocked_by {
             if !by_id.contains_key(blocker.as_str()) {
-                errors.push(format!("{}.blockedBy: unknown ticket {}", ticket.id, blocker));
+                errors.push(format!(
+                    "{}.blockedBy: unknown ticket {}",
+                    ticket.id, blocker
+                ));
             }
         }
     }
@@ -359,14 +365,7 @@ fn visit<'a>(
     if let Some(ticket) = by_id.get(id) {
         for blocker in &ticket.blocked_by {
             if by_id.contains_key(blocker.as_str()) {
-                visit(
-                    blocker.as_str(),
-                    by_id,
-                    visiting,
-                    visited,
-                    stack,
-                    errors,
-                );
+                visit(blocker.as_str(), by_id, visiting, visited, stack, errors);
             }
         }
     }

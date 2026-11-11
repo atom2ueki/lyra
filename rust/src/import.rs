@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::schema::{validate_graph, Ticket};
+use crate::schema::{Ticket, validate_graph};
 use crate::store::{append_event, ensure_store, write_ticket};
 
 const MAPPED_FIELDS: &[&str] = &[
@@ -70,7 +70,7 @@ fn normalize_execution(value: &Value) -> Option<Value> {
     let claimed_at = object
         .get("claimedAt")
         .and_then(Value::as_str)
-        .unwrap_or_else(|| "")
+        .unwrap_or("")
         .to_string();
     let claimed_at = if claimed_at.is_empty() {
         crate::schema::now_iso()
@@ -207,10 +207,10 @@ pub fn import_omp_kanban(source: &Path, target: &Path, project_id: &str) -> Resu
     let mut tickets = Vec::new();
     for path in entries {
         let result = (|| -> Result<Ticket> {
-            let text = fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))?;
-            let raw: Value = serde_json::from_str(&text)
-                .with_context(|| format!("parse {}", path.display()))?;
+            let text =
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            let raw: Value =
+                serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
             map_ticket(&raw, project_id)
         })();
         match result {

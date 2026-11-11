@@ -67,10 +67,10 @@ impl Default for LyraConfig {
 }
 
 pub fn lyra_home() -> PathBuf {
-    if let Ok(value) = env::var("LYRA_HOME") {
-        if !value.trim().is_empty() {
-            return PathBuf::from(value);
-        }
+    if let Ok(value) = env::var("LYRA_HOME")
+        && !value.trim().is_empty()
+    {
+        return PathBuf::from(value);
     }
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".lyra")
@@ -83,8 +83,7 @@ pub fn config_path() -> PathBuf {
 pub fn ensure_config() -> Result<PathBuf> {
     let path = config_path();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     if !path.exists() {
         fs::write(&path, DEFAULT_CONFIG).with_context(|| format!("write {}", path.display()))?;
@@ -96,9 +95,7 @@ pub fn load_config() -> Result<LyraConfig> {
     let path = config_path();
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            DEFAULT_CONFIG.to_string()
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DEFAULT_CONFIG.to_string(),
         Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
     };
     let raw: RawConfig =
@@ -109,8 +106,12 @@ pub fn load_config() -> Result<LyraConfig> {
     }
     let approval_posture = match raw.approval_posture.as_deref() {
         None => ApprovalPosture::Ask,
-        Some(value) => ApprovalPosture::parse(value)
-            .ok_or_else(|| anyhow::anyhow!("{}: approval_posture must be safe|ask|unsafe", path.display()))?,
+        Some(value) => ApprovalPosture::parse(value).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}: approval_posture must be safe|ask|unsafe",
+                path.display()
+            )
+        })?,
     };
     let merge = match raw.merge.as_deref() {
         Some("manual") => MergeMode::Manual,

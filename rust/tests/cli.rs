@@ -49,7 +49,11 @@ fn imports_and_reports_status() {
         ])
         .output()
         .unwrap();
-    assert!(import.status.success(), "{}", String::from_utf8_lossy(&import.stderr));
+    assert!(
+        import.status.success(),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
     let report: Value = serde_json::from_slice(&import.stdout).unwrap();
     assert_eq!(report["imported"], 1);
 
@@ -63,7 +67,11 @@ fn imports_and_reports_status() {
         ])
         .output()
         .unwrap();
-    assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
     let payload: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(payload["counts"]["todo"], 1);
     assert_eq!(payload["ready"], serde_json::json!(["T-001"]));

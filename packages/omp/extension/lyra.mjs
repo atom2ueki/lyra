@@ -30,11 +30,11 @@ export default function lyraOmpExtension(pi) {
   pi.setLabel("Lyra");
 
   pi.registerCommand("lyra", {
-    description: "Run the Lyra task conductor (status/start/monitor/stop/close/graph/models/doctor)",
+    description: "Run the Lyra task conductor (status/start/monitor/resume/stop/report/close/graph/models/doctor)",
     handler: async (args, ctx) => {
       const argv = String(args ?? "").trim().split(/\s+/).filter(Boolean);
       if (argv.length === 0) {
-        ctx.ui?.notify?.("usage: /lyra status|start|monitor|stop|close|graph|models|doctor", "info");
+        ctx.ui?.notify?.("usage: /lyra status|start|monitor|resume|stop|report|close|graph|models|doctor", "info");
         return;
       }
       const result = await run(argv, ctx?.cwd, ctx);
@@ -49,13 +49,13 @@ export default function lyraOmpExtension(pi) {
     label: "Lyra conductor",
     description: "Read Lyra status or run its conductor commands. The standalone lyra CLI owns the task graph; this tool does not edit tickets directly.",
     parameters: z.object({
-      command: z.enum(["status", "start", "monitor", "stop", "close", "graph", "models", "doctor"]),
+      command: z.enum(["status", "start", "monitor", "resume", "stop", "report", "close", "graph", "models", "doctor"]),
       args: z.array(z.string()).optional().describe("Extra CLI arguments, e.g. [\"--max\",\"2\"]"),
       cwd: z.string().optional().describe("Project directory (defaults to the session cwd)"),
     }),
     approval: "write",
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const conductorCommands = { status: true, start: true, monitor: true, stop: true };
+      const conductorCommands = { status: true, start: true, monitor: true, resume: true, report: true, stop: true, close: true };
       const argv = conductorCommands[params.command]
         ? ["conduct", params.command, ...(params.args ?? [])]
         : [params.command, ...(params.args ?? [])];

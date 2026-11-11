@@ -1,5 +1,5 @@
 use crate::schema::Ticket;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn node_id(id: &str) -> String {
     let mut out = String::from("n_");
@@ -14,7 +14,11 @@ fn node_id(id: &str) -> String {
 }
 
 fn label(ticket: &Ticket) -> String {
-    let subject = ticket.subject.split_whitespace().collect::<Vec<_>>().join(" ");
+    let subject = ticket
+        .subject
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     format!("{} · {}", ticket.id, subject).replace('"', "'")
 }
 
@@ -38,7 +42,11 @@ pub fn to_mermaid(tickets: &[Ticket]) -> String {
 pub fn to_dot(tickets: &[Ticket]) -> String {
     let mut lines = vec!["digraph lyra {".to_string(), "  rankdir=LR;".to_string()];
     for ticket in tickets {
-        lines.push(format!("  {} [label=\"{}\"];", node_id(&ticket.id), label(ticket)));
+        lines.push(format!(
+            "  {} [label=\"{}\"];",
+            node_id(&ticket.id),
+            label(ticket)
+        ));
     }
     for ticket in tickets {
         for blocker in &ticket.blocked_by {
@@ -69,9 +77,10 @@ pub fn to_json(tickets: &[Ticket]) -> Value {
     let edges: Vec<Value> = tickets
         .iter()
         .flat_map(|ticket| {
-            ticket.blocked_by.iter().map(move |blocker| {
-                json!({"from": blocker, "to": ticket.id})
-            })
+            ticket
+                .blocked_by
+                .iter()
+                .map(move |blocker| json!({"from": blocker, "to": ticket.id}))
         })
         .collect();
     json!({"nodes": nodes, "edges": edges})

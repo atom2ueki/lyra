@@ -37,7 +37,7 @@ limits:
     astralform: 2
 "#;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPolicy {
     pub classes: HashMap<String, Vec<String>>,
@@ -45,7 +45,7 @@ pub struct ModelPolicy {
     pub limits: ModelLimits,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelLimits {
     pub providers: HashMap<String, u32>,
@@ -53,10 +53,8 @@ pub struct ModelLimits {
 
 impl Default for ModelPolicy {
     fn default() -> Self {
-        parse_policy(
-            serde_yaml::from_str(DEFAULT_MODEL_POLICY).expect("default model policy"),
-        )
-        .expect("default model policy")
+        parse_policy(serde_yaml::from_str(DEFAULT_MODEL_POLICY).expect("default model policy"))
+            .expect("default model policy")
     }
 }
 
@@ -137,8 +135,7 @@ pub fn model_policy_path() -> PathBuf {
 pub fn ensure_model_policy() -> Result<PathBuf> {
     let path = model_policy_path();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     if !path.exists() {
         fs::write(&path, DEFAULT_MODEL_POLICY)
@@ -154,13 +151,13 @@ fn candidates(value: &YamlValue) -> Vec<String> {
             .filter_map(|v| v.as_str().map(str::to_string))
             .collect();
     }
-    if let Some(map) = value.as_mapping() {
-        if let Some(sequence) = map.get("candidates").and_then(YamlValue::as_sequence) {
-            return sequence
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect();
-        }
+    if let Some(map) = value.as_mapping()
+        && let Some(sequence) = map.get("candidates").and_then(YamlValue::as_sequence)
+    {
+        return sequence
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
     }
     Vec::new()
 }
@@ -230,10 +227,10 @@ const LEVEL_SUFFIXES: &[&str] = &[
 ];
 
 pub fn model_key(selector: &str) -> String {
-    if let Some((base, level)) = selector.rsplit_once(':') {
-        if LEVEL_SUFFIXES.contains(&level) {
-            return base.to_string();
-        }
+    if let Some((base, level)) = selector.rsplit_once(':')
+        && LEVEL_SUFFIXES.contains(&level)
+    {
+        return base.to_string();
     }
     selector.to_string()
 }
@@ -246,24 +243,23 @@ pub fn provider_of(selector: &str) -> String {
 }
 
 pub fn provider_exhausted(usage: &[UsageReport], provider: &str) -> bool {
-    usage.iter().filter(|report| report.provider == provider).any(|report| {
-        report.limits.iter().any(|limit| {
-            let status = limit.status.as_deref().or(report.status.as_deref());
-            matches!(status, Some("exhausted" | "blocked" | "limit_reached"))
-                || limit
-                    .amount
-                    .as_ref()
-                    .and_then(|amount| amount.remaining_fraction)
-                    .is_some_and(|fraction| fraction <= 0.0)
+    usage
+        .iter()
+        .filter(|report| report.provider == provider)
+        .any(|report| {
+            report.limits.iter().any(|limit| {
+                let status = limit.status.as_deref().or(report.status.as_deref());
+                matches!(status, Some("exhausted" | "blocked" | "limit_reached"))
+                    || limit
+                        .amount
+                        .as_ref()
+                        .and_then(|amount| amount.remaining_fraction)
+                        .is_some_and(|fraction| fraction <= 0.0)
+            })
         })
-    })
 }
 
-pub fn cap_for(
-    provider: &str,
-    policy: &ModelPolicy,
-    config_caps: &HashMap<String, u32>,
-) -> u32 {
+pub fn cap_for(provider: &str, policy: &ModelPolicy, config_caps: &HashMap<String, u32>) -> u32 {
     let configured = config_caps.get(provider).copied();
     let policy_cap = policy.limits.providers.get(provider).copied();
     match (configured, policy_cap) {
@@ -362,8 +358,7 @@ pub fn role_overlay(policy: &ModelPolicy, selected: &str) -> YamlValue {
 
 pub fn write_role_overlay(path: &Path, policy: &ModelPolicy, selected: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let text = serde_yaml::to_string(&role_overlay(policy, selected))?;
     fs::write(path, text).with_context(|| format!("write {}", path.display()))?;
@@ -456,7 +451,10 @@ pub fn load_stats() -> Result<Vec<ModelStat>> {
     Ok(result)
 }
 
-pub fn active_providers(tickets: &[crate::schema::Ticket], run_running: &HashSet<String>) -> HashMap<String, u32> {
+pub fn active_providers(
+    tickets: &[crate::schema::Ticket],
+    run_running: &HashSet<String>,
+) -> HashMap<String, u32> {
     let mut counts = HashMap::new();
     for ticket in tickets {
         if !run_running.contains(&ticket.id) {

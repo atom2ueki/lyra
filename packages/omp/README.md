@@ -6,12 +6,12 @@ Thin OMP surface for the standalone Lyra conductor:
 - `lyra_conduct` — model-callable status/start/monitor/stop/close tool.
 
 The adapter does not own the task graph; it shells out to the `lyra` binary. Install the core CLI
-first (`bun link` in the repository root), or set `LYRA_BIN` to an absolute command.
+first (`cd rust && cargo install --path .`), or set `LYRA_BIN` to an absolute command.
 
 ```sh
 # from the Lyra repository root
-bun link
-omp plugin link ./packages/omp
+cd rust && cargo install --path .
+cd .. && omp plugin link ./packages/omp
 # restart omp or /reload-plugins
 ```
 

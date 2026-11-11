@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use crate::acceptance::validate_acceptance_paths;
+use crate::conductor::{
+    MonitorOptions, RunState, StartOptions, close_run, latest_run_dir, load_state, monitor_run,
+    run_dir_for, start_run, stop_run,
+};
 use crate::config::{ensure_config, load_config, lyra_home};
 use crate::graph::{to_dot, to_json, to_mermaid};
 use crate::import::import_omp_kanban;
@@ -13,9 +17,14 @@ use crate::models::{
     ensure_model_policy, load_model_catalog, load_policy, load_usage, model_policy_path,
     select_model,
 };
+use crate::pane::{
+    PaneBackend, ghostty::GhosttyBackend, headless::HeadlessBackend, herdr::HerdrBackend,
+    select_backend,
+};
 use crate::project::{current_project, project_id_for, store_dir_for};
-use crate::schema::{ready_tickets, ticket_map, validate_graph, Ticket, TicketStatus};
-use crate::store::{create_ticket, ensure_store, list_tickets, NewTicket};
+use crate::schema::{Ticket, TicketStatus, ready_tickets, ticket_map, validate_graph};
+use crate::store::{NewTicket, create_ticket, ensure_store, list_tickets};
+use crate::worker::ensure_worker_extension;
 
 #[derive(Parser)]
 #[command(name = "lyra", version, about = "Lyra — supervised task conductor")]
@@ -64,6 +73,25 @@ enum Command {
         #[arg(long = "project-id")]
         project_id: Option<String>,
     },
+    Close {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Logs {
+        ticket: String,
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long, default_value_t = 80)]
+        lines: usize,
+    },
+    Report {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     Doctor,
 }
 
@@ -75,6 +103,184 @@ enum ConductCommand {
         #[arg(long)]
         json: bool,
     },
+    Run {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Start {
+        #[arg(long)]
+        ticket: Option<String>,
+        #[arg(long = "max-parallel", alias = "max")]
+        max_parallel: Option<u32>,
+        #[arg(long = "max-seconds")]
+        max_seconds: Option<u64>,
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long, value_enum)]
+        backend: Option<PaneBackendKind>,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Monitor {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        once: bool,
+        #[arg(long = "interval-ms", default_value_t = 1000)]
+        interval_ms: u64,
+        #[arg(long = "timeout-ms")]
+        timeout_ms: Option<u64>,
+        #[arg(long = "max-parallel")]
+        max_parallel: Option<u32>,
+        #[arg(long, value_enum)]
+        backend: Option<PaneBackendKind>,
+        #[arg(long)]
+        json: bool,
+    },
+    Report {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Resume {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long = "interval-ms", default_value_t = 1000)]
+        interval_ms: u64,
+        #[arg(long = "timeout-ms")]
+        timeout_ms: Option<u64>,
+        #[arg(long = "max-parallel")]
+        max_parallel: Option<u32>,
+        #[arg(long, value_enum)]
+        backend: Option<PaneBackendKind>,
+        #[arg(long)]
+        json: bool,
+    },
+    Stop {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long, value_enum)]
+        backend: Option<PaneBackendKind>,
+        #[arg(long)]
+        json: bool,
+    },
+    Close {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PaneBackendKind {
+    Herdr,
+    Ghostty,
+    Headless,
+}
+
+fn pane_backend(kind: Option<PaneBackendKind>) -> Result<Box<dyn PaneBackend>> {
+    match kind {
+        Some(PaneBackendKind::Herdr) => Ok(Box::new(HerdrBackend::new())),
+        Some(PaneBackendKind::Ghostty) => Ok(Box::new(GhosttyBackend::new())),
+        Some(PaneBackendKind::Headless) => Ok(Box::new(HeadlessBackend::new())),
+        None => select_backend(),
+    }
+}
+
+fn resolve_run_dir(root: &Path, run: Option<String>) -> Result<PathBuf> {
+    match run {
+        Some(run_id) => Ok(run_dir_for(root, &run_id)),
+        None => latest_run_dir(root)?.ok_or_else(|| anyhow::anyhow!("no runs found")),
+    }
+}
+
+fn tail(text: &str, lines: usize) -> String {
+    let all: Vec<&str> = text.lines().collect();
+    let start = all.len().saturating_sub(lines);
+    all[start..].join("\n")
+}
+
+fn print_logs(root: &Path, ticket_id: &str, run: Option<String>, lines: usize) -> Result<()> {
+    let run_dir = resolve_run_dir(root, run)?;
+    let state = load_state(&run_dir)?;
+    let ticket = state
+        .tickets
+        .get(ticket_id)
+        .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} is not part of run {}", state.run_id))?;
+    let worker_dir = run_dir.join("workers").join(ticket_id);
+    let logs = worker_dir.join("logs");
+    if let Ok(entries) = std::fs::read_dir(&logs) {
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("log"))
+            .collect();
+        files.sort();
+        let mut printed = false;
+        for file in files {
+            if let Ok(text) = std::fs::read_to_string(&file)
+                && !text.trim().is_empty()
+            {
+                println!("== {} ==", file.display());
+                println!("{}", tail(&text, lines));
+                printed = true;
+            }
+        }
+        if printed {
+            return Ok(());
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string(worker_dir.join("state.json")) {
+        println!("{}", text);
+    } else if let Some(pane) = &ticket.pane {
+        println!("pane: {:?}", pane);
+    } else {
+        println!("(no output for {ticket_id})");
+    }
+    Ok(())
+}
+
+fn print_run(state: &RunState, json_output: bool) -> Result<()> {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(state)?);
+    } else {
+        println!("Run:      {}", state.run_id);
+        println!("Project:  {}", state.project_id);
+        println!("Status:   {:?}", state.status);
+        println!("Backend:  {}", state.backend);
+        println!("Base:     {}", state.base_ref);
+        println!("Dir:      {}", state.run_dir);
+        println!("Parallel: {}", state.max_parallel);
+        if state.tickets.is_empty() {
+            println!("Tickets:  (none launched)");
+        } else {
+            println!("Tickets:");
+            let mut ids: Vec<_> = state.tickets.keys().collect();
+            ids.sort();
+            for id in ids {
+                let ticket = &state.tickets[id];
+                let model = ticket.model.as_deref().unwrap_or("-");
+                let phase = ticket.phase.as_deref().unwrap_or("-");
+                println!(
+                    "  {:<10} {:<8} {:<32} {:<24} {}",
+                    id,
+                    format!("{:?}", ticket.status),
+                    ticket.branch,
+                    model,
+                    phase
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -121,11 +327,20 @@ fn counts(tickets: &[Ticket]) -> HashMap<&'static str, usize> {
     counts
 }
 
-fn print_status(store: &Path, project_id: &str, root: &Path, tickets: &[Ticket], json_output: bool) -> Result<i32> {
+fn print_status(
+    store: &Path,
+    project_id: &str,
+    root: &Path,
+    tickets: &[Ticket],
+    json_output: bool,
+) -> Result<i32> {
     let mut errors = validate_graph(tickets);
     errors.extend(validate_acceptance_paths(tickets, root));
     let by_id = ticket_map(tickets);
-    let ready: Vec<&str> = ready_tickets(tickets).iter().map(|t| t.id.as_str()).collect();
+    let ready: Vec<&str> = ready_tickets(tickets)
+        .iter()
+        .map(|t| t.id.as_str())
+        .collect();
     let blocked: Vec<&str> = tickets
         .iter()
         .filter(|ticket| {
@@ -170,11 +385,19 @@ fn print_status(store: &Path, project_id: &str, root: &Path, tickets: &[Ticket],
         );
         println!(
             "Ready:    {}",
-            if ready.is_empty() { "(none)".to_string() } else { ready.join(", ") }
+            if ready.is_empty() {
+                "(none)".to_string()
+            } else {
+                ready.join(", ")
+            }
         );
         println!(
             "Blocked:  {}",
-            if blocked.is_empty() { "(none)".to_string() } else { blocked.join(", ") }
+            if blocked.is_empty() {
+                "(none)".to_string()
+            } else {
+                blocked.join(", ")
+            }
         );
         if errors.is_empty() {
             println!("Graph:    valid");
@@ -216,12 +439,15 @@ fn run_doctor() -> Result<i32> {
     check("omp", command_version(&omp_bin, &["--version"]));
     check("git", command_version("git", &["--version"]));
     check("gh", command_version("gh", &["--version"]));
-    check("config", load_config().map(|config| {
-        format!(
-            "max_parallel={} approval={:?} merge={:?}",
-            config.max_parallel, config.approval_posture, config.merge
-        )
-    }));
+    check(
+        "config",
+        load_config().map(|config| {
+            format!(
+                "max_parallel={} approval={:?} merge={:?}",
+                config.max_parallel, config.approval_posture, config.merge
+            )
+        }),
+    );
     check(
         "model policy",
         load_policy().map(|policy| {
@@ -232,13 +458,25 @@ fn run_doctor() -> Result<i32> {
             )
         }),
     );
-    check("pane backend", Ok(if std::env::var("HERDR_ENV").ok().as_deref() == Some("1") {
-        "herdr".to_string()
-    } else if std::env::var("TERM_PROGRAM").ok().as_deref() == Some("ghostty") {
-        "ghostty".to_string()
-    } else {
-        "headless".to_string()
-    }));
+    check(
+        "worker extension",
+        ensure_worker_extension().map(|path| path.display().to_string()),
+    );
+    if std::env::var("HERDR_ENV").ok().as_deref() == Some("1") {
+        check("herdr", command_version("herdr", &["--version"]));
+    }
+    check(
+        "pane backend",
+        select_backend().map(|backend| backend.name().to_string()),
+    );
+    check(
+        "tty",
+        Ok(if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            "interactive".to_string()
+        } else {
+            "not a TTY (headless backend available)".to_string()
+        }),
+    );
     check(
         "ticket store",
         current_project().and_then(|(_, _, store)| {
@@ -298,12 +536,19 @@ pub fn run() -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
-                println!("Imported: {} ticket(s) from {}", report.imported, report.source);
+                println!(
+                    "Imported: {} ticket(s) from {}",
+                    report.imported, report.source
+                );
                 println!("Target:   {}", report.target);
                 println!("Project:  {}", report.project_id);
                 println!(
                     "Attachments copied: {}",
-                    if report.attachments_copied { "yes" } else { "no" }
+                    if report.attachments_copied {
+                        "yes"
+                    } else {
+                        "no"
+                    }
                 );
                 println!(
                     "Events copied:      {}",
@@ -335,6 +580,97 @@ pub fn run() -> Result<()> {
                     std::process::exit(code);
                 }
             }
+            ConductCommand::Run { run, json } => {
+                let context = resolve_store(None, None)?;
+                let state = load_state(&resolve_run_dir(&context.root, run)?)?;
+                print_run(&state, json)?;
+            }
+            ConductCommand::Start {
+                ticket,
+                max_parallel,
+                max_seconds,
+                base,
+                run_id,
+                backend,
+                dry_run,
+                json,
+            } => {
+                let context = resolve_store(None, None)?;
+                let state = start_run(StartOptions {
+                    repo: context.root.clone(),
+                    store: context.store.clone(),
+                    project_id: context.project_id.clone(),
+                    config: load_config()?,
+                    backend: Some(pane_backend(backend)?),
+                    max_parallel,
+                    max_seconds,
+                    ticket_id: ticket,
+                    base_ref: base,
+                    dry_run,
+                    run_id,
+                    model_policy: None,
+                    models: None,
+                    usage: None,
+                })?;
+                print_run(&state, json)?;
+            }
+            ConductCommand::Monitor {
+                run,
+                once,
+                interval_ms,
+                timeout_ms,
+                max_parallel,
+                backend,
+                json,
+            } => {
+                let context = resolve_store(None, None)?;
+                let state = monitor_run(MonitorOptions {
+                    run_dir: resolve_run_dir(&context.root, run)?,
+                    backend: Some(pane_backend(backend)?),
+                    once,
+                    interval_ms,
+                    timeout_ms,
+                    max_parallel,
+                })?;
+                print_run(&state, json)?;
+            }
+            ConductCommand::Report { run, json } => {
+                let context = resolve_store(None, None)?;
+                let state = load_state(&resolve_run_dir(&context.root, run)?)?;
+                print_run(&state, json)?;
+            }
+            ConductCommand::Resume {
+                run,
+                interval_ms,
+                timeout_ms,
+                max_parallel,
+                backend,
+                json,
+            } => {
+                let context = resolve_store(None, None)?;
+                let state = monitor_run(MonitorOptions {
+                    run_dir: resolve_run_dir(&context.root, run)?,
+                    backend: Some(pane_backend(backend)?),
+                    once: false,
+                    interval_ms,
+                    timeout_ms,
+                    max_parallel,
+                })?;
+                print_run(&state, json)?;
+            }
+            ConductCommand::Stop { run, backend, json } => {
+                let context = resolve_store(None, None)?;
+                let state = stop_run(
+                    &resolve_run_dir(&context.root, run)?,
+                    Some(pane_backend(backend)?),
+                )?;
+                print_run(&state, json)?;
+            }
+            ConductCommand::Close { run, json } => {
+                let context = resolve_store(None, None)?;
+                let state = close_run(&resolve_run_dir(&context.root, run)?)?;
+                print_run(&state, json)?;
+            }
         },
         Some(Command::Status { store, json }) => {
             let context = resolve_store(store, None)?;
@@ -363,7 +699,9 @@ pub fn run() -> Result<()> {
             match format {
                 GraphFormat::Mermaid => print!("{}", to_mermaid(&tickets)),
                 GraphFormat::Dot => print!("{}", to_dot(&tickets)),
-                GraphFormat::Json => println!("{}", serde_json::to_string_pretty(&to_json(&tickets))?),
+                GraphFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&to_json(&tickets))?)
+                }
             }
         }
         Some(Command::Models { json }) => {
@@ -443,6 +781,20 @@ pub fn run() -> Result<()> {
                 },
             )?;
             println!("{}  {}", ticket.id, ticket.subject);
+        }
+        Some(Command::Close { run, json }) => {
+            let context = resolve_store(None, None)?;
+            let state = close_run(&resolve_run_dir(&context.root, run)?)?;
+            print_run(&state, json)?;
+        }
+        Some(Command::Logs { ticket, run, lines }) => {
+            let context = resolve_store(None, None)?;
+            print_logs(&context.root, &ticket, run, lines)?;
+        }
+        Some(Command::Report { run, json }) => {
+            let context = resolve_store(None, None)?;
+            let state = load_state(&resolve_run_dir(&context.root, run)?)?;
+            print_run(&state, json)?;
         }
         Some(Command::Doctor) => {
             let code = run_doctor()?;

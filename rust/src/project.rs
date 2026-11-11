@@ -12,12 +12,11 @@ pub fn resolve_project_root(cwd: &Path) -> PathBuf {
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(cwd)
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !text.is_empty() {
-                return PathBuf::from(text);
-            }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !text.is_empty() {
+            return PathBuf::from(text);
         }
     }
     fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())

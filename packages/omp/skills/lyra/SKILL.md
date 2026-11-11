@@ -1,6 +1,6 @@
 ---
 name: lyra
-description: "Run the Lyra task conductor from an OMP session: status, start, monitor, stop, close, graph, models, doctor. Use when the user asks to run or inspect a Lyra run, or to hand work to independent worker sessions. Lyra owns the task graph; do not edit ticket files directly."
+description: "Run the Lyra task conductor from an OMP session: status, start, monitor, resume, report, stop, close, graph, models, doctor. Use when the user asks to run or inspect a Lyra run, or to hand work to independent worker sessions. Lyra owns the task graph; do not edit ticket files directly."
 ---
 
 # Lyra
@@ -14,6 +14,8 @@ the ticket store, worktrees, workers, and state.
 /lyra status                 # validate the task graph
 /lyra start --max 2          # claim ready tickets and launch workers
 /lyra monitor --once         # settle results and start the next ready ticket
+/lyra resume                 # resume a blocked run after blockers finish
+/lyra report                 # run summary and per-ticket state
 /lyra stop                   # stop the current run's workers
 /lyra close                  # remove clean run-scoped worktrees
 /lyra graph --format mermaid # static task-graph projection

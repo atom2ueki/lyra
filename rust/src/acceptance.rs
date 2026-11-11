@@ -26,7 +26,10 @@ pub fn validate_acceptance_paths(tickets: &[Ticket], project_root: &Path) -> Vec
             project_root.join(value)
         };
         if !target.exists() {
-            errors.push(format!("{}.acceptance: file not found: {}", ticket.id, value));
+            errors.push(format!(
+                "{}.acceptance: file not found: {}",
+                ticket.id, value
+            ));
         }
     }
     errors

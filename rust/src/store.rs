@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::schema::{
-    now_iso, ready_tickets, ticket_map, Ticket, TicketExecution, TicketStatus, TicketSuspension,
+    Ticket, TicketExecution, TicketStatus, TicketSuspension, now_iso, ready_tickets, ticket_map,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -47,10 +47,9 @@ pub fn list_tickets(store: &Path) -> Result<Vec<Ticket>> {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let ticket: Ticket = serde_json::from_str(&text)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let ticket: Ticket =
+            serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
         tickets.push(ticket);
     }
     tickets.sort_by(|a, b| a.id.cmp(&b.id));
@@ -61,8 +60,8 @@ pub fn read_ticket(store: &Path, id: &str) -> Result<Option<Ticket>> {
     let path = tasks_dir(store).join(format!("{id}.json"));
     match fs::read_to_string(&path) {
         Ok(text) => {
-            let ticket = serde_json::from_str(&text)
-                .with_context(|| format!("parse {}", path.display()))?;
+            let ticket =
+                serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
             Ok(Some(ticket))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -93,10 +92,10 @@ pub fn next_ticket_id(store: &Path) -> Result<String> {
     let tickets = list_tickets(store).unwrap_or_default();
     let mut max = 0u64;
     for ticket in tickets {
-        if let Some(raw) = ticket.id.strip_prefix("T-") {
-            if let Ok(value) = raw.parse::<u64>() {
-                max = max.max(value);
-            }
+        if let Some(raw) = ticket.id.strip_prefix("T-")
+            && let Ok(value) = raw.parse::<u64>()
+        {
+            max = max.max(value);
         }
     }
     Ok(format!("T-{:03}", max + 1))
@@ -172,16 +171,21 @@ fn next_seq(path: &Path) -> Result<u64> {
         if line.trim().is_empty() {
             continue;
         }
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
-            if let Some(seq) = value.get("seq").and_then(Value::as_u64) {
-                return Ok(seq + 1);
-            }
+        if let Ok(value) = serde_json::from_str::<Value>(line)
+            && let Some(seq) = value.get("seq").and_then(Value::as_u64)
+        {
+            return Ok(seq + 1);
         }
     }
     Ok(text.lines().filter(|line| !line.trim().is_empty()).count() as u64 + 1)
 }
 
-pub fn claim_ticket(store: &Path, id: &str, run_id: &str, claim_id: &str) -> Result<Option<Ticket>> {
+pub fn claim_ticket(
+    store: &Path,
+    id: &str,
+    run_id: &str,
+    claim_id: &str,
+) -> Result<Option<Ticket>> {
     let Some(mut ticket) = read_ticket(store, id)? else {
         return Ok(None);
     };
@@ -336,10 +340,7 @@ pub fn suspend_ticket(
     let by_id = ticket_map(&all);
     for blocker in &args.blockers {
         if blocker == id {
-            return Err(StoreError::Message(format!(
-                "{id}: a ticket cannot block itself"
-            ))
-            .into());
+            return Err(StoreError::Message(format!("{id}: a ticket cannot block itself")).into());
         }
         if !by_id.contains_key(blocker.as_str()) {
             return Err(StoreError::Message(format!("{id}: unknown blocker {blocker}")).into());
