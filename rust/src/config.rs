@@ -1,0 +1,125 @@
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+
+pub const DEFAULT_CONFIG: &str = r#"# Lyra user config
+max_parallel = 2
+approval_posture = "ask"
+merge = "auto"
+
+[max_per_provider]
+astralform = 2
+"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApprovalPosture {
+    Safe,
+    Ask,
+    Unsafe,
+}
+
+impl ApprovalPosture {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "safe" => Some(Self::Safe),
+            "ask" => Some(Self::Ask),
+            "unsafe" => Some(Self::Unsafe),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeMode {
+    Auto,
+    Manual,
+}
+
+#[derive(Debug, Clone)]
+pub struct LyraConfig {
+    pub max_parallel: u32,
+    pub max_per_provider: HashMap<String, u32>,
+    pub approval_posture: ApprovalPosture,
+    pub merge: MergeMode,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawConfig {
+    max_parallel: Option<u32>,
+    max_per_provider: Option<HashMap<String, u32>>,
+    approval_posture: Option<String>,
+    merge: Option<String>,
+}
+
+impl Default for LyraConfig {
+    fn default() -> Self {
+        Self {
+            max_parallel: 2,
+            max_per_provider: HashMap::new(),
+            approval_posture: ApprovalPosture::Ask,
+            merge: MergeMode::Auto,
+        }
+    }
+}
+
+pub fn lyra_home() -> PathBuf {
+    if let Ok(value) = env::var("LYRA_HOME") {
+        if !value.trim().is_empty() {
+            return PathBuf::from(value);
+        }
+    }
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".lyra")
+}
+
+pub fn config_path() -> PathBuf {
+    lyra_home().join("config.toml")
+}
+
+pub fn ensure_config() -> Result<PathBuf> {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
+    if !path.exists() {
+        fs::write(&path, DEFAULT_CONFIG).with_context(|| format!("write {}", path.display()))?;
+    }
+    Ok(path)
+}
+
+pub fn load_config() -> Result<LyraConfig> {
+    let path = config_path();
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            DEFAULT_CONFIG.to_string()
+        }
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let raw: RawConfig =
+        toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+    let max_parallel = raw.max_parallel.unwrap_or(2);
+    if max_parallel == 0 {
+        anyhow::bail!("{}: max_parallel must be positive", path.display());
+    }
+    let approval_posture = match raw.approval_posture.as_deref() {
+        None => ApprovalPosture::Ask,
+        Some(value) => ApprovalPosture::parse(value)
+            .ok_or_else(|| anyhow::anyhow!("{}: approval_posture must be safe|ask|unsafe", path.display()))?,
+    };
+    let merge = match raw.merge.as_deref() {
+        Some("manual") => MergeMode::Manual,
+        _ => MergeMode::Auto,
+    };
+    Ok(LyraConfig {
+        max_parallel,
+        max_per_provider: raw.max_per_provider.unwrap_or_default(),
+        approval_posture,
+        merge,
+    })
+}
