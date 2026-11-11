@@ -1,6 +1,6 @@
 # Lyra
 
-Private repository: <https://github.com/atom2ueki/lyra>
+Repository: <https://github.com/atom2ueki/lyra>
 
 Lyra is a supervised task conductor for coding agents. It keeps the task graph in a local store,
 schedules ready work into agent panes, and records results as files — not as a chat transcript.
@@ -36,15 +36,8 @@ lyra upgrade
 ```
 
 The installer uses `~/.local/bin` by default and verifies the release `SHA256SUMS` before replacing
-the binary. Override with `LYRA_INSTALL_DIR`, pin a tag with `LYRA_VERSION=0.1.0`, or use
-`LYRA_GITHUB_TOKEN` for a private repository. The repository currently needs to be public for the
-unauthenticated `curl | sh` form; an authenticated private install is:
-
-```sh
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
-  https://raw.githubusercontent.com/atom2ueki/lyra/main/install.sh \
-  | LYRA_GITHUB_TOKEN="$GITHUB_TOKEN" sh
-```
+the binary. Override with `LYRA_INSTALL_DIR`, pin a tag with `LYRA_VERSION=0.1.1`, or use
+`LYRA_GITHUB_TOKEN` for a private fork (`gh` is required for authenticated asset downloads).
 
 From source:
 
