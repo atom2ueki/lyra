@@ -215,7 +215,9 @@ fn print_logs(root: &Path, ticket_id: &str, run: Option<String>, lines: usize) -
         .tickets
         .get(ticket_id)
         .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} is not part of run {}", state.run_id))?;
-    let worker_dir = run_dir.join("workers").join(ticket_id);
+    let worker_dir = run_dir
+        .join("workers")
+        .join(crate::worktree::safe_segment(ticket_id));
     let logs = worker_dir.join("logs");
     if let Ok(entries) = std::fs::read_dir(&logs) {
         let mut files: Vec<PathBuf> = entries

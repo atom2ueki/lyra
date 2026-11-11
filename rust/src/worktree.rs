@@ -60,8 +60,8 @@ pub fn detect_base_ref(repo: &Path) -> Result<String> {
     anyhow::bail!("cannot detect a base ref in {}", repo.display())
 }
 
-fn safe_segment(value: &str) -> String {
-    value
+pub fn safe_segment(value: &str) -> String {
+    let segment: String = value
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '-' {
@@ -70,7 +70,12 @@ fn safe_segment(value: &str) -> String {
                 '-'
             }
         })
-        .collect()
+        .collect();
+    if segment.is_empty() || segment == "." || segment == ".." {
+        "_".to_string()
+    } else {
+        segment
+    }
 }
 
 pub fn create_worktree(
@@ -214,4 +219,17 @@ pub fn close_run_worktrees(
         let _ = fs::remove_dir(&root);
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_segment;
+
+    #[test]
+    fn path_segments_cannot_escape_the_run_directory() {
+        assert_eq!(safe_segment(".."), "_");
+        assert_eq!(safe_segment("."), "_");
+        assert_eq!(safe_segment("../T-001"), "..-T-001");
+        assert_eq!(safe_segment("run/../../x"), "run-..-..-x");
+    }
 }

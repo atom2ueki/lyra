@@ -56,7 +56,14 @@ pub fn list_tickets(store: &Path) -> Result<Vec<Ticket>> {
     Ok(tickets)
 }
 
+fn valid_ticket_id(id: &str) -> bool {
+    !id.is_empty() && id != "." && id != ".." && !id.contains('/') && !id.contains('\\')
+}
+
 pub fn read_ticket(store: &Path, id: &str) -> Result<Option<Ticket>> {
+    if !valid_ticket_id(id) {
+        anyhow::bail!("invalid ticket id: {id}");
+    }
     let path = tasks_dir(store).join(format!("{id}.json"));
     match fs::read_to_string(&path) {
         Ok(text) => {
@@ -70,6 +77,9 @@ pub fn read_ticket(store: &Path, id: &str) -> Result<Option<Ticket>> {
 }
 
 pub fn write_ticket(store: &Path, ticket: &Ticket) -> Result<PathBuf> {
+    if !valid_ticket_id(&ticket.id) {
+        anyhow::bail!("invalid ticket id: {}", ticket.id);
+    }
     ensure_store(store)?;
     let path = tasks_dir(store).join(format!("{}.json", ticket.id));
     let temporary = path.with_extension(format!("json.{}.tmp", Uuid::new_v4()));

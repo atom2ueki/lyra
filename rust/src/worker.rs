@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::ApprovalPosture;
 use crate::schema::{Ticket, now_iso};
+use crate::worktree::safe_segment;
 
 pub const WORKER_EXTENSION_SOURCE: &str = include_str!("../../extensions/lyra-worker.mjs");
 
@@ -25,7 +26,7 @@ pub struct WorkerPaths {
 
 impl WorkerPaths {
     pub fn new(run_dir: &Path, ticket_id: &str) -> Self {
-        let root = run_dir.join("workers").join(ticket_id);
+        let root = run_dir.join("workers").join(safe_segment(ticket_id));
         Self {
             requests: root.join("requests"),
             responses: root.join("responses"),

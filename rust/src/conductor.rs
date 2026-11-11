@@ -140,7 +140,7 @@ fn new_run_id() -> String {
 }
 
 pub fn run_dir_for(repo: &Path, run_id: &str) -> PathBuf {
-    runs_dir_for(repo).join(run_id)
+    runs_dir_for(repo).join(crate::worktree::safe_segment(run_id))
 }
 
 pub fn list_run_ids(repo: &Path) -> Result<Vec<String>> {
@@ -349,7 +349,7 @@ fn launch_ticket(
             base_head: worker_base_head.clone(),
             session_dir: Path::new(&state.run_dir)
                 .join("sessions")
-                .join(&ticket.id)
+                .join(crate::worktree::safe_segment(&ticket.id))
                 .display()
                 .to_string(),
             prompt_file: paths.prompt.display().to_string(),
