@@ -56,6 +56,19 @@ pub enum RunTicketStatus {
     Stopped,
 }
 
+impl RunTicketStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Blocked => "blocked",
+            Self::Failed => "failed",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunTicketState {

@@ -2,10 +2,12 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::json;
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use crate::acceptance::validate_acceptance_paths;
+use crate::agent::{RunSummary, TicketSummary, build_status};
 use crate::conductor::{
     MonitorOptions, RunState, StartOptions, close_run, latest_run_dir, load_state, monitor_run,
     run_dir_for, start_run, stop_run,
@@ -23,7 +25,8 @@ use crate::pane::{
 };
 use crate::project::{current_project, project_id_for, store_dir_for};
 use crate::schema::{Ticket, TicketStatus, ready_tickets, ticket_map, validate_graph};
-use crate::store::{NewTicket, create_ticket, ensure_store, list_tickets};
+use crate::store::{NewTicket, create_ticket, ensure_store, list_tickets, read_ticket};
+use crate::tickets::{BatchInput, create_batch};
 use crate::worker::ensure_worker_extension;
 
 #[derive(Parser)]
@@ -55,6 +58,8 @@ enum Command {
         store: Option<PathBuf>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Graph {
         #[arg(long, value_enum, default_value_t = GraphFormat::Mermaid)]
@@ -72,6 +77,10 @@ enum Command {
         store: Option<PathBuf>,
         #[arg(long = "project-id")]
         project_id: Option<String>,
+    },
+    Tickets {
+        #[command(subcommand)]
+        command: TicketsCommand,
     },
     Close {
         #[arg(long)]
@@ -91,6 +100,8 @@ enum Command {
         run: Option<String>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Upgrade {
         #[arg(long)]
@@ -112,12 +123,16 @@ enum ConductCommand {
         store: Option<PathBuf>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Run {
         #[arg(long)]
         run: Option<String>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Start {
         #[arg(long)]
@@ -136,6 +151,8 @@ enum ConductCommand {
         dry_run: bool,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Monitor {
         #[arg(long)]
@@ -152,12 +169,16 @@ enum ConductCommand {
         backend: Option<PaneBackendKind>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Report {
         #[arg(long)]
         run: Option<String>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Resume {
         #[arg(long)]
@@ -260,9 +281,16 @@ fn print_logs(root: &Path, ticket_id: &str, run: Option<String>, lines: usize) -
     Ok(())
 }
 
-fn print_run(state: &RunState, json_output: bool) -> Result<()> {
+fn print_run(state: &RunState, json_output: bool, concise: bool) -> Result<()> {
     if json_output {
-        println!("{}", serde_json::to_string_pretty(state)?);
+        if concise {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&RunSummary::from_state(state))?
+            );
+        } else {
+            println!("{}", serde_json::to_string_pretty(state)?);
+        }
     } else {
         println!("Run:      {}", state.run_id);
         println!("Project:  {}", state.project_id);
@@ -293,6 +321,35 @@ fn print_run(state: &RunState, json_output: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Subcommand)]
+enum TicketsCommand {
+    List {
+        #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        details: bool,
+    },
+    Show {
+        id: String,
+        #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Create {
+        #[arg(long, default_value = "-")]
+        file: String,
+        #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long = "project-id")]
+        project_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -345,6 +402,7 @@ fn print_status(
     root: &Path,
     tickets: &[Ticket],
     json_output: bool,
+    concise: bool,
 ) -> Result<i32> {
     let mut errors = validate_graph(tickets);
     errors.extend(validate_acceptance_paths(tickets, root));
@@ -369,7 +427,14 @@ fn print_status(
         .map(|ticket| ticket.project_id.as_str())
         .unwrap_or(project_id);
     let count_map = counts(tickets);
-    if json_output {
+    if json_output && concise {
+        let run = latest_run_dir(root)
+            .ok()
+            .flatten()
+            .and_then(|dir| load_state(&dir).ok());
+        let payload = build_status(effective_project, tickets, errors.clone(), run.as_ref());
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else if json_output {
         let payload = json!({
             "store": store.display().to_string(),
             "projectId": effective_project,
@@ -578,7 +643,11 @@ pub fn run() -> Result<()> {
             }
         }
         Some(Command::Conduct { command }) => match command {
-            ConductCommand::Status { store, json } => {
+            ConductCommand::Status {
+                store,
+                json,
+                concise,
+            } => {
                 let context = resolve_store(store, None)?;
                 let tickets = list_tickets(&context.store)?;
                 let code = print_status(
@@ -587,15 +656,16 @@ pub fn run() -> Result<()> {
                     &context.root,
                     &tickets,
                     json,
+                    concise,
                 )?;
                 if code != 0 {
                     std::process::exit(code);
                 }
             }
-            ConductCommand::Run { run, json } => {
+            ConductCommand::Run { run, json, concise } => {
                 let context = resolve_store(None, None)?;
                 let state = load_state(&resolve_run_dir(&context.root, run)?)?;
-                print_run(&state, json)?;
+                print_run(&state, json, concise)?;
             }
             ConductCommand::Start {
                 ticket,
@@ -606,6 +676,7 @@ pub fn run() -> Result<()> {
                 backend,
                 dry_run,
                 json,
+                concise,
             } => {
                 let context = resolve_store(None, None)?;
                 let state = start_run(StartOptions {
@@ -624,7 +695,7 @@ pub fn run() -> Result<()> {
                     models: None,
                     usage: None,
                 })?;
-                print_run(&state, json)?;
+                print_run(&state, json, concise)?;
             }
             ConductCommand::Monitor {
                 run,
@@ -634,6 +705,7 @@ pub fn run() -> Result<()> {
                 max_parallel,
                 backend,
                 json,
+                concise,
             } => {
                 let context = resolve_store(None, None)?;
                 let state = monitor_run(MonitorOptions {
@@ -644,12 +716,12 @@ pub fn run() -> Result<()> {
                     timeout_ms,
                     max_parallel,
                 })?;
-                print_run(&state, json)?;
+                print_run(&state, json, concise)?;
             }
-            ConductCommand::Report { run, json } => {
+            ConductCommand::Report { run, json, concise } => {
                 let context = resolve_store(None, None)?;
                 let state = load_state(&resolve_run_dir(&context.root, run)?)?;
-                print_run(&state, json)?;
+                print_run(&state, json, concise)?;
             }
             ConductCommand::Resume {
                 run,
@@ -668,7 +740,7 @@ pub fn run() -> Result<()> {
                     timeout_ms,
                     max_parallel,
                 })?;
-                print_run(&state, json)?;
+                print_run(&state, json, false)?;
             }
             ConductCommand::Stop { run, backend, json } => {
                 let context = resolve_store(None, None)?;
@@ -676,15 +748,19 @@ pub fn run() -> Result<()> {
                     &resolve_run_dir(&context.root, run)?,
                     Some(pane_backend(backend)?),
                 )?;
-                print_run(&state, json)?;
+                print_run(&state, json, false)?;
             }
             ConductCommand::Close { run, json } => {
                 let context = resolve_store(None, None)?;
                 let state = close_run(&resolve_run_dir(&context.root, run)?)?;
-                print_run(&state, json)?;
+                print_run(&state, json, false)?;
             }
         },
-        Some(Command::Status { store, json }) => {
+        Some(Command::Status {
+            store,
+            json,
+            concise,
+        }) => {
             let context = resolve_store(store, None)?;
             let tickets = list_tickets(&context.store)?;
             let code = print_status(
@@ -693,6 +769,7 @@ pub fn run() -> Result<()> {
                 &context.root,
                 &tickets,
                 json,
+                concise,
             )?;
             if code != 0 {
                 std::process::exit(code);
@@ -797,19 +874,132 @@ pub fn run() -> Result<()> {
             )?;
             println!("{}  {}", ticket.id, ticket.subject);
         }
+        Some(Command::Tickets { command }) => match command {
+            TicketsCommand::List {
+                store,
+                json,
+                details,
+            } => {
+                let context = resolve_store(store, None)?;
+                let tickets = list_tickets(&context.store)?;
+                let ready_ids: Vec<&str> = ready_tickets(&tickets)
+                    .into_iter()
+                    .map(|ticket| ticket.id.as_str())
+                    .collect();
+                let items: Vec<TicketSummary> = tickets
+                    .iter()
+                    .map(|ticket| {
+                        TicketSummary::from_ticket(ticket, ready_ids.contains(&ticket.id.as_str()))
+                    })
+                    .collect();
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&items)?);
+                } else {
+                    for item in &items {
+                        println!(
+                            "{}  {:<8}  {:<3}  {}{}",
+                            item.id,
+                            item.status,
+                            item.priority,
+                            item.subject,
+                            if item.ready { "  [ready]" } else { "" }
+                        );
+                        if details {
+                            if !item.blocked_by.is_empty() {
+                                println!("    blocked by: {}", item.blocked_by.join(", "));
+                            }
+                            if let Some(error) = &item.last_error {
+                                println!("    last error: {error}");
+                            }
+                            println!("    attempts: {}", item.attempts);
+                        }
+                    }
+                }
+            }
+            TicketsCommand::Show { id, store, json } => {
+                let context = resolve_store(store, None)?;
+                let ticket = read_ticket(&context.store, &id)?
+                    .ok_or_else(|| anyhow::anyhow!("unknown ticket: {id}"))?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&ticket)?);
+                } else {
+                    println!("ID:          {}", ticket.id);
+                    println!("Subject:     {}", ticket.subject);
+                    println!("Status:      {:?}", ticket.status);
+                    println!("Priority:    {}", ticket.priority);
+                    println!(
+                        "Blocked by:  {}",
+                        if ticket.blocked_by.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            ticket.blocked_by.join(", ")
+                        }
+                    );
+                    println!("Attempts:    {}", ticket.attempts);
+                    if let Some(error) = &ticket.last_error {
+                        println!("Last error:  {error}");
+                    }
+                    println!(
+                        "
+Prompt:
+{}",
+                        ticket.prompt
+                    );
+                    if let Some(acceptance) = &ticket.acceptance {
+                        println!(
+                            "
+Acceptance:
+{acceptance}"
+                        );
+                    }
+                    if let Some(plan) = &ticket.plan {
+                        println!(
+                            "
+Plan:
+{plan}"
+                        );
+                    }
+                }
+            }
+            TicketsCommand::Create {
+                file,
+                store,
+                project_id,
+                json,
+            } => {
+                let context = resolve_store(store, project_id)?;
+                let mut text = String::new();
+                if file == "-" {
+                    std::io::stdin().read_to_string(&mut text)?;
+                } else {
+                    text =
+                        std::fs::read_to_string(&file).with_context(|| format!("read {file}"))?;
+                }
+                let input: BatchInput =
+                    serde_json::from_str(&text).with_context(|| "parse batch ticket JSON")?;
+                let output = create_batch(&context.store, &context.project_id, input)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&output)?);
+                } else {
+                    for item in &output.created {
+                        println!("{}  {}", item.id, item.key);
+                    }
+                }
+            }
+        },
         Some(Command::Close { run, json }) => {
             let context = resolve_store(None, None)?;
             let state = close_run(&resolve_run_dir(&context.root, run)?)?;
-            print_run(&state, json)?;
+            print_run(&state, json, false)?;
         }
         Some(Command::Logs { ticket, run, lines }) => {
             let context = resolve_store(None, None)?;
             print_logs(&context.root, &ticket, run, lines)?;
         }
-        Some(Command::Report { run, json }) => {
+        Some(Command::Report { run, json, concise }) => {
             let context = resolve_store(None, None)?;
             let state = load_state(&resolve_run_dir(&context.root, run)?)?;
-            print_run(&state, json)?;
+            print_run(&state, json, concise)?;
         }
         Some(Command::Upgrade {
             check,
