@@ -133,6 +133,28 @@ fn creates_a_batch_dag_and_reports_agent_status() {
     assert_eq!(shown["prompt"], "Build core");
     assert_eq!(shown["acceptance"], "Core works");
 
+    let not_ready = run(
+        &fixture,
+        &[
+            "conduct",
+            "start",
+            "--dry-run",
+            "--json",
+            "--concise",
+            "--backend",
+            "headless",
+            "--ticket",
+            "T-002",
+        ],
+        None,
+    );
+    assert!(!not_ready.status.success());
+    let not_ready_body: serde_json::Value = serde_json::from_slice(&not_ready.stdout).unwrap();
+    assert_eq!(not_ready_body["error"]["code"], "invalid_input");
+    let message = not_ready_body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("T-002"));
+    assert!(message.contains("T-001"));
+
     let started = json(&run(
         &fixture,
         &[
@@ -222,4 +244,98 @@ fn default_status_json_keeps_the_existing_shape() {
     let status = json(&run(&fixture, &["status", "--json"], None));
     assert_eq!(status["counts"]["todo"], 4);
     assert!(status.get("graph").is_none());
+}
+
+#[test]
+fn start_selects_repeated_tickets_and_rejects_not_ready_ones() {
+    let fixture = fixture();
+    let batch = r#"{
+      "tickets": [
+        {"key":"one","subject":"One","prompt":"One","blockedBy":[]},
+        {"key":"two","subject":"Two","prompt":"Two","blockedBy":[]},
+        {"key":"three","subject":"Three","prompt":"Three","blockedBy":[]}
+      ]
+    }"#;
+    assert!(
+        run(
+            &fixture,
+            &["tickets", "create", "--file", "-", "--json"],
+            Some(batch)
+        )
+        .status
+        .success()
+    );
+    let selected = json(&run(
+        &fixture,
+        &[
+            "conduct",
+            "start",
+            "--dry-run",
+            "--json",
+            "--concise",
+            "--backend",
+            "headless",
+            "--ticket",
+            "T-001",
+            "--ticket",
+            "T-003",
+        ],
+        None,
+    ));
+    assert_eq!(
+        selected["plannedTickets"],
+        serde_json::json!(["T-001", "T-003"])
+    );
+    let selected_comma = json(&run(
+        &fixture,
+        &[
+            "conduct",
+            "start",
+            "--dry-run",
+            "--json",
+            "--concise",
+            "--backend",
+            "headless",
+            "--tickets",
+            "T-001,T-003",
+        ],
+        None,
+    ));
+    assert_eq!(
+        selected_comma["plannedTickets"],
+        serde_json::json!(["T-001", "T-003"])
+    );
+    let run_id = selected["runId"].as_str().unwrap();
+    let stopped = json(&run(
+        &fixture,
+        &["conduct", "stop", "--run", run_id, "--json", "--concise"],
+        None,
+    ));
+    assert_eq!(stopped["status"], "stopped");
+    let closed = json(&run(
+        &fixture,
+        &["conduct", "close", "--run", run_id, "--json", "--concise"],
+        None,
+    ));
+    assert_eq!(closed["status"], "closed");
+
+    let blocked = run(
+        &fixture,
+        &[
+            "conduct",
+            "start",
+            "--dry-run",
+            "--json",
+            "--concise",
+            "--backend",
+            "headless",
+            "--ticket",
+            "T-999",
+        ],
+        None,
+    );
+    assert!(!blocked.status.success());
+    let body: serde_json::Value = serde_json::from_slice(&blocked.stdout).unwrap();
+    assert_eq!(body["error"]["code"], "unknown_ticket");
+    assert!(body["error"]["message"].as_str().unwrap().contains("T-999"));
 }

@@ -1,8 +1,12 @@
 fn error_code(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
-    if lower.contains("unknown ticket") || lower.contains("unknown blocker") {
+    if lower.contains("unknown ticket")
+        || lower.contains("unknown tickets")
+        || lower.contains("unknown blocker")
+    {
         "unknown_ticket"
-    } else if lower.contains("cycle")
+    } else if lower.contains("not ready")
+        || lower.contains("cycle")
         || lower.contains("invalid")
         || lower.contains("unknown dependency")
         || lower.contains("must ")

@@ -111,12 +111,16 @@ pub struct RunState {
     pub base_ref: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_policy: Option<ModelPolicy>,
     #[serde(default)]
     pub model_catalog: Vec<ModelInfo>,
     #[serde(default)]
     pub usage: Vec<UsageReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planned_tickets: Vec<String>,
     #[serde(default)]
     pub tickets: HashMap<String, RunTicketState>,
 }
@@ -129,7 +133,7 @@ pub struct StartOptions {
     pub backend: Option<Box<dyn PaneBackend>>,
     pub max_parallel: Option<u32>,
     pub max_seconds: Option<u64>,
-    pub ticket_id: Option<String>,
+    pub ticket_ids: Vec<String>,
     pub base_ref: Option<String>,
     pub dry_run: bool,
     pub run_id: Option<String>,
@@ -145,6 +149,20 @@ pub struct MonitorOptions {
     pub interval_ms: u64,
     pub timeout_ms: Option<u64>,
     pub max_parallel: Option<u32>,
+}
+
+pub struct WaitOptions {
+    pub run_dir: PathBuf,
+    pub backend: Option<Box<dyn PaneBackend>>,
+    pub after_revision: Option<u64>,
+    pub timeout_ms: u64,
+    pub interval_ms: u64,
+    pub max_parallel: Option<u32>,
+}
+
+pub struct WaitOutcome {
+    pub state: RunState,
+    pub timed_out: bool,
 }
 
 fn new_run_id() -> String {
@@ -186,13 +204,16 @@ pub fn load_state(run_dir: &Path) -> Result<RunState> {
 }
 
 pub fn save_state(state: &mut RunState) -> Result<()> {
-    state.updated_at = now_iso();
-    let path = PathBuf::from(&state.run_dir).join("state.json");
+    let mut persisted = state.clone();
+    persisted.updated_at = now_iso();
+    persisted.revision = state.revision.saturating_add(1);
+    let path = PathBuf::from(&persisted.run_dir).join("state.json");
     let temporary = path.with_extension(format!("json.{}.tmp", Uuid::new_v4()));
-    let text = serde_json::to_string_pretty(state)? + "\n";
+    let text = serde_json::to_string_pretty(&persisted)? + "\n";
     fs::write(&temporary, text).with_context(|| format!("write {}", temporary.display()))?;
     fs::rename(&temporary, &path)
         .with_context(|| format!("rename {} -> {}", temporary.display(), path.display()))?;
+    *state = persisted;
     Ok(())
 }
 
@@ -602,25 +623,43 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
     if !graph_errors.is_empty() {
         anyhow::bail!("invalid ticket graph:\n- {}", graph_errors.join("\n- "));
     }
-    let mut candidates: Vec<Ticket> = ready_tickets(&tickets).into_iter().cloned().collect();
-    if let Some(ticket_id) = &options.ticket_id {
-        let named = tickets
-            .iter()
-            .find(|ticket| ticket.id == *ticket_id)
-            .ok_or_else(|| anyhow::anyhow!("unknown ticket: {ticket_id}"))?;
-        if !candidates.iter().any(|ticket| ticket.id == named.id) {
-            anyhow::bail!(
-                "ticket {} is not ready (status {:?}, blockers {})",
-                named.id,
-                named.status,
-                if named.blocked_by.is_empty() {
-                    "none".to_string()
-                } else {
-                    named.blocked_by.join(", ")
-                }
-            );
+    let ready: Vec<Ticket> = ready_tickets(&tickets).into_iter().cloned().collect();
+    let mut candidates = ready.clone();
+    if !options.ticket_ids.is_empty() {
+        let ready_ids: HashSet<&str> = ready.iter().map(|ticket| ticket.id.as_str()).collect();
+        let mut unknown = Vec::new();
+        let mut not_ready = Vec::new();
+        let mut selected = Vec::new();
+        let mut seen = HashSet::new();
+        for ticket_id in &options.ticket_ids {
+            if !seen.insert(ticket_id.clone()) {
+                continue;
+            }
+            let Some(ticket) = tickets.iter().find(|ticket| ticket.id == *ticket_id) else {
+                unknown.push(ticket_id.clone());
+                continue;
+            };
+            if !ready_ids.contains(ticket.id.as_str()) {
+                not_ready.push(format!(
+                    "{} (blocked by {})",
+                    ticket.id,
+                    if ticket.blocked_by.is_empty() {
+                        "nothing; status is not ready".to_string()
+                    } else {
+                        ticket.blocked_by.join(", ")
+                    }
+                ));
+                continue;
+            }
+            selected.push(ticket.clone());
         }
-        candidates = vec![named.clone()];
+        if !unknown.is_empty() {
+            anyhow::bail!("unknown tickets: {}", unknown.join(", "));
+        }
+        if !not_ready.is_empty() {
+            anyhow::bail!("tickets not ready: {}", not_ready.join("; "));
+        }
+        candidates = selected;
     }
     let base_ref = match options.base_ref {
         Some(value) => value,
@@ -659,9 +698,11 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
         base_ref: base_ref.clone(),
         created_at: now_iso(),
         updated_at: now_iso(),
+        revision: 0,
         model_policy: model_policy.clone(),
         model_catalog: model_catalog.clone(),
         usage: usage.clone(),
+        planned_tickets: candidates.iter().map(|ticket| ticket.id.clone()).collect(),
         tickets: HashMap::new(),
     };
     save_state(&mut state)?;
@@ -954,54 +995,86 @@ fn launch_ready(state: &mut RunState, backend: &dyn PaneBackend, max_parallel: u
     Ok(())
 }
 
+fn run_has_active(state: &RunState) -> bool {
+    state.tickets.values().any(|ticket| {
+        matches!(
+            ticket.status,
+            RunTicketStatus::Running | RunTicketStatus::Starting
+        )
+    })
+}
+
+fn run_is_settled(state: &RunState) -> bool {
+    !run_has_active(state)
+        && matches!(
+            state.status,
+            RunStatus::Planned
+                | RunStatus::Done
+                | RunStatus::Blocked
+                | RunStatus::Stopped
+                | RunStatus::Closed
+        )
+}
+
+pub fn monitor_once(
+    run_dir: &Path,
+    backend: &dyn PaneBackend,
+    max_parallel: u32,
+) -> Result<RunState> {
+    let mut state = load_state(run_dir)?;
+    let running: Vec<String> = state
+        .tickets
+        .iter()
+        .filter(|(_, ticket)| ticket.status == RunTicketStatus::Running)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for ticket_id in running {
+        process_requests(&state, &ticket_id)?;
+        settle_worker(&mut state, &ticket_id, backend)?;
+    }
+    state = load_state(run_dir)?;
+    launch_ready(&mut state, backend, max_parallel)?;
+    state = load_state(run_dir)?;
+    let active = run_has_active(&state);
+    let tickets = list_tickets(Path::new(&state.store))?;
+    let remaining: Vec<&Ticket> = ready_tickets(&tickets)
+        .into_iter()
+        .filter(|ticket| {
+            !ticket
+                .suspension
+                .as_ref()
+                .is_some_and(|suspension| suspension.needs_input)
+        })
+        .collect();
+    if !active && remaining.is_empty() {
+        let open = tickets
+            .iter()
+            .any(|ticket| matches!(ticket.status, TicketStatus::Todo | TicketStatus::InProgress));
+        state.status = if open {
+            RunStatus::Blocked
+        } else {
+            RunStatus::Done
+        };
+        save_state(&mut state)?;
+    }
+    Ok(state)
+}
+
 pub fn monitor_run(options: MonitorOptions) -> Result<RunState> {
     let backend = match options.backend {
         Some(backend) => backend,
         None => select_backend()?,
     };
-    let mut state = load_state(&options.run_dir)?;
+    let max_parallel = match options.max_parallel {
+        Some(value) => value,
+        None => load_state(&options.run_dir)?.max_parallel,
+    };
     let deadline = options
         .timeout_ms
         .map(|timeout| Instant::now() + Duration::from_millis(timeout));
-    let max_parallel = options.max_parallel.unwrap_or(state.max_parallel);
     loop {
-        let running: Vec<String> = state
-            .tickets
-            .iter()
-            .filter(|(_, ticket)| ticket.status == RunTicketStatus::Running)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for ticket_id in running {
-            process_requests(&state, &ticket_id)?;
-            settle_worker(&mut state, &ticket_id, backend.as_ref())?;
-        }
-        state = load_state(&options.run_dir)?;
-        launch_ready(&mut state, backend.as_ref(), max_parallel)?;
-        state = load_state(&options.run_dir)?;
-        let active = state
-            .tickets
-            .values()
-            .any(|ticket| ticket.status == RunTicketStatus::Running);
-        let tickets = list_tickets(Path::new(&state.store))?;
-        let remaining: Vec<&Ticket> = ready_tickets(&tickets)
-            .into_iter()
-            .filter(|ticket| {
-                !ticket
-                    .suspension
-                    .as_ref()
-                    .is_some_and(|suspension| suspension.needs_input)
-            })
-            .collect();
-        if !active && remaining.is_empty() {
-            let open = tickets.iter().any(|ticket| {
-                matches!(ticket.status, TicketStatus::Todo | TicketStatus::InProgress)
-            });
-            state.status = if open {
-                RunStatus::Blocked
-            } else {
-                RunStatus::Done
-            };
-            save_state(&mut state)?;
+        let mut state = monitor_once(&options.run_dir, backend.as_ref(), max_parallel)?;
+        if run_is_settled(&state) {
             return Ok(state);
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -1011,6 +1084,42 @@ pub fn monitor_run(options: MonitorOptions) -> Result<RunState> {
         }
         if options.once {
             return Ok(state);
+        }
+        sleep(Duration::from_millis(options.interval_ms));
+    }
+}
+
+pub fn wait_run(options: WaitOptions) -> Result<WaitOutcome> {
+    let backend = match options.backend {
+        Some(backend) => backend,
+        None => select_backend()?,
+    };
+    let deadline = Instant::now() + Duration::from_millis(options.timeout_ms);
+    let after_revision = match options.after_revision {
+        Some(revision) => revision,
+        None => load_state(&options.run_dir)?.revision,
+    };
+    loop {
+        let state = load_state(&options.run_dir)?;
+        if state.revision > after_revision || run_is_settled(&state) {
+            return Ok(WaitOutcome {
+                state,
+                timed_out: false,
+            });
+        }
+        let max_parallel = options.max_parallel.unwrap_or(state.max_parallel);
+        let state = monitor_once(&options.run_dir, backend.as_ref(), max_parallel)?;
+        if state.revision > after_revision || run_is_settled(&state) {
+            return Ok(WaitOutcome {
+                state,
+                timed_out: false,
+            });
+        }
+        if Instant::now() >= deadline {
+            return Ok(WaitOutcome {
+                state,
+                timed_out: true,
+            });
         }
         sleep(Duration::from_millis(options.interval_ms));
     }
@@ -1079,4 +1188,49 @@ pub fn close_run(run_dir: &Path) -> Result<RunState> {
     state.status = RunStatus::Closed;
     save_state(&mut state)?;
     Ok(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ApprovalPosture;
+
+    fn test_state(dir: &Path) -> RunState {
+        RunState {
+            schema_version: 1,
+            run_id: "run-test".to_string(),
+            project_id: "project".to_string(),
+            repo: "/tmp/repo".to_string(),
+            store: "/tmp/store".to_string(),
+            run_dir: dir.display().to_string(),
+            status: RunStatus::Running,
+            max_parallel: 1,
+            max_per_provider: HashMap::new(),
+            approval: ApprovalPosture::Ask,
+            backend: "headless".to_string(),
+            base_ref: "main".to_string(),
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            revision: 0,
+            model_policy: None,
+            model_catalog: Vec::new(),
+            usage: Vec::new(),
+            planned_tickets: Vec::new(),
+            tickets: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn each_successful_save_increments_the_revision_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_state(dir.path());
+        save_state(&mut state).unwrap();
+        assert_eq!(state.revision, 1);
+        save_state(&mut state).unwrap();
+        assert_eq!(state.revision, 2);
+        save_state(&mut state).unwrap();
+        assert_eq!(state.revision, 3);
+        let loaded = load_state(dir.path()).unwrap();
+        assert_eq!(loaded.revision, 3);
+    }
 }

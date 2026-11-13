@@ -60,7 +60,17 @@ pub struct RunSummary {
     pub base_ref: String,
     pub created_at: String,
     pub updated_at: String,
+    pub revision: u64,
+    pub planned_tickets: Vec<String>,
     pub tickets: Vec<RunTicketSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitSummary {
+    #[serde(flatten)]
+    pub run: RunSummary,
+    pub timed_out: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -201,6 +211,8 @@ impl RunSummary {
             base_ref: state.base_ref.clone(),
             created_at: state.created_at.clone(),
             updated_at: state.updated_at.clone(),
+            revision: state.revision,
+            planned_tickets: state.planned_tickets.clone(),
             tickets,
         }
     }
@@ -303,6 +315,8 @@ mod tests {
             base_ref: "main".to_string(),
             created_at: "now".to_string(),
             updated_at: "now".to_string(),
+            revision: 0,
+            planned_tickets: Vec::new(),
             tickets: vec![RunTicketSummary {
                 id: "T-001".to_string(),
                 status: status.to_string(),

@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use crate::acceptance::validate_acceptance_paths;
-use crate::agent::{RunSummary, TicketSummary, build_status};
+use crate::agent::{RunSummary, TicketSummary, WaitSummary, build_status};
 use crate::conductor::{
-    MonitorOptions, RunState, StartOptions, close_run, latest_run_dir, load_state, monitor_run,
-    run_dir_for, start_run, stop_run,
+    MonitorOptions, RunState, StartOptions, WaitOptions, WaitOutcome, close_run, latest_run_dir,
+    load_state, monitor_run, run_dir_for, start_run, stop_run, wait_run,
 };
 use crate::config::{ensure_config, load_config, lyra_home};
 use crate::graph::{to_dot, to_json, to_mermaid};
@@ -135,8 +135,12 @@ enum ConductCommand {
         concise: bool,
     },
     Start {
-        #[arg(long)]
-        ticket: Option<String>,
+        /// Explicit ready ticket id; repeat the flag for multiple tickets.
+        #[arg(long = "ticket", action = clap::ArgAction::Append)]
+        ticket: Vec<String>,
+        /// Comma-separated explicit ready ticket ids.
+        #[arg(long = "tickets", value_delimiter = ',')]
+        tickets: Vec<String>,
         #[arg(long = "max-parallel", alias = "max")]
         max_parallel: Option<u32>,
         #[arg(long = "max-seconds")]
@@ -161,8 +165,29 @@ enum ConductCommand {
         once: bool,
         #[arg(long = "interval-ms", default_value_t = 1000)]
         interval_ms: u64,
+        /// Interactive monitor timeout marks the run stopped when it expires.
         #[arg(long = "timeout-ms")]
         timeout_ms: Option<u64>,
+        #[arg(long = "max-parallel")]
+        max_parallel: Option<u32>,
+        #[arg(long, value_enum)]
+        backend: Option<PaneBackendKind>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        concise: bool,
+    },
+    Wait {
+        #[arg(long)]
+        run: Option<String>,
+        /// Return immediately if the run revision is greater than this; defaults to the current revision.
+        #[arg(long = "after-revision")]
+        after_revision: Option<u64>,
+        /// Bounded wait; expiry returns timed_out without changing the run status.
+        #[arg(long = "timeout-ms", default_value_t = 30_000)]
+        timeout_ms: u64,
+        #[arg(long = "interval-ms", default_value_t = 500)]
+        interval_ms: u64,
         #[arg(long = "max-parallel")]
         max_parallel: Option<u32>,
         #[arg(long, value_enum)]
@@ -201,12 +226,16 @@ enum ConductCommand {
         backend: Option<PaneBackendKind>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Close {
         #[arg(long)]
         run: Option<String>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
 }
 
@@ -350,6 +379,31 @@ enum TicketsCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+fn print_wait(outcome: &WaitOutcome, json_output: bool, concise: bool) -> Result<()> {
+    if json_output {
+        let run = RunSummary::from_state(&outcome.state);
+        if concise {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&WaitSummary {
+                    run,
+                    timed_out: outcome.timed_out,
+                })?
+            );
+        } else {
+            let mut value = serde_json::to_value(&outcome.state)?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert("timedOut".to_string(), serde_json::json!(outcome.timed_out));
+            }
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        }
+    } else {
+        print_run(&outcome.state, false, false)?;
+        println!("Timed out: {}", outcome.timed_out);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -669,6 +723,7 @@ pub fn run() -> Result<()> {
             }
             ConductCommand::Start {
                 ticket,
+                tickets,
                 max_parallel,
                 max_seconds,
                 base,
@@ -679,6 +734,8 @@ pub fn run() -> Result<()> {
                 concise,
             } => {
                 let context = resolve_store(None, None)?;
+                let mut ticket_ids = ticket;
+                ticket_ids.extend(tickets);
                 let state = start_run(StartOptions {
                     repo: context.root.clone(),
                     store: context.store.clone(),
@@ -687,7 +744,7 @@ pub fn run() -> Result<()> {
                     backend: Some(pane_backend(backend)?),
                     max_parallel,
                     max_seconds,
-                    ticket_id: ticket,
+                    ticket_ids,
                     base_ref: base,
                     dry_run,
                     run_id,
@@ -718,6 +775,27 @@ pub fn run() -> Result<()> {
                 })?;
                 print_run(&state, json, concise)?;
             }
+            ConductCommand::Wait {
+                run,
+                after_revision,
+                timeout_ms,
+                interval_ms,
+                max_parallel,
+                backend,
+                json,
+                concise,
+            } => {
+                let context = resolve_store(None, None)?;
+                let outcome = wait_run(WaitOptions {
+                    run_dir: resolve_run_dir(&context.root, run)?,
+                    backend: Some(pane_backend(backend)?),
+                    after_revision,
+                    timeout_ms,
+                    interval_ms,
+                    max_parallel,
+                })?;
+                print_wait(&outcome, json, concise)?;
+            }
             ConductCommand::Report { run, json, concise } => {
                 let context = resolve_store(None, None)?;
                 let state = load_state(&resolve_run_dir(&context.root, run)?)?;
@@ -742,18 +820,23 @@ pub fn run() -> Result<()> {
                 })?;
                 print_run(&state, json, false)?;
             }
-            ConductCommand::Stop { run, backend, json } => {
+            ConductCommand::Stop {
+                run,
+                backend,
+                json,
+                concise,
+            } => {
                 let context = resolve_store(None, None)?;
                 let state = stop_run(
                     &resolve_run_dir(&context.root, run)?,
                     Some(pane_backend(backend)?),
                 )?;
-                print_run(&state, json, false)?;
+                print_run(&state, json, concise)?;
             }
-            ConductCommand::Close { run, json } => {
+            ConductCommand::Close { run, json, concise } => {
                 let context = resolve_store(None, None)?;
                 let state = close_run(&resolve_run_dir(&context.root, run)?)?;
-                print_run(&state, json, false)?;
+                print_run(&state, json, concise)?;
             }
         },
         Some(Command::Status {
