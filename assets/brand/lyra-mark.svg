@@ -5,49 +5,47 @@
       <circle cx="1.2" cy="1.2" r="1.1" fill="#232320" opacity=".10"/>
     </pattern>
   </defs>
-  <rect x="80" y="80" width="864" height="864" fill="url(#dots)" opacity=".7"/>
-  <circle cx="512" cy="490" r="306" fill="none" stroke="#1E5BFF" stroke-width="1" stroke-dasharray="1 13" opacity=".18"/>
-  <g transform="translate(0 20) scale(1.2)">
-<path d="M402 300 L510 526" stroke="#232320" stroke-width="1" stroke-dasharray="2 9" opacity=".16"/>
-<path d="M474 300 L582 512" stroke="#232320" stroke-width="1" stroke-dasharray="2 9" opacity=".16"/>
-<path d="M546 300 L438 512" stroke="#232320" stroke-width="1" stroke-dasharray="2 9" opacity=".16"/>
-<path d="M618 300 L510 526" stroke="#232320" stroke-width="1" stroke-dasharray="2 9" opacity=".16"/>
-<path d="M438 300 L546 521" stroke="#232320" stroke-width="1" stroke-dasharray="2 9" opacity=".16"/>
-<path d="M582 300 L474 521" stroke="#232320" stroke-width="1" stroke-dasharray="2 9" opacity=".16"/>
-<path d="M352 248 C292 292 292 472 378 536" fill="none" stroke="#1E5BFF" stroke-width="2.4" stroke-linecap="square"/>
-<path d="M672 248 C732 292 732 472 646 536" fill="none" stroke="#1E5BFF" stroke-width="2.4" stroke-linecap="square"/>
-<path d="M366 300 H658" fill="none" stroke="#1E5BFF" stroke-width="2.4" stroke-linecap="square"/>
-<path d="M378 536 Q512 570 646 536" fill="none" stroke="#1E5BFF" stroke-width="2.4" stroke-linecap="square"/>
-<path d="M402 300 L402 500" stroke="#1E5BFF" stroke-width="1.8" stroke-dasharray="2 8" opacity=".9"/>
-<rect x="398" y="296" width="8" height="8" fill="#1E5BFF"/>
-<rect x="398" y="496" width="8" height="8" fill="none" stroke="#1E5BFF" stroke-width="1.8"/>
-<path d="M438 300 L438 512" stroke="#1E5BFF" stroke-width="1.8" stroke-dasharray="2 8" opacity=".9"/>
-<rect x="434" y="296" width="8" height="8" fill="#1E5BFF"/>
-<rect x="435" y="509" width="6" height="6" fill="#1E5BFF" opacity=".85"/>
-<path d="M474 300 L474 521" stroke="#1E5BFF" stroke-width="1.8" stroke-dasharray="2 8" opacity=".9"/>
-<rect x="470" y="296" width="8" height="8" fill="#1E5BFF"/>
-<rect x="471" y="518" width="6" height="6" fill="#1E5BFF" opacity=".85"/>
-<path d="M510 300 L510 526" stroke="#1E5BFF" stroke-width="1.8" stroke-dasharray="2 8" opacity=".9"/>
-<rect x="506" y="296" width="8" height="8" fill="#1E5BFF"/>
-<circle cx="510" cy="530" r="7" fill="#F7F5EE" stroke="#89891F" stroke-width="2"/>
-<circle cx="510" cy="530" r="2.5" fill="#89891F"/>
-<path d="M546 300 L546 521" stroke="#1E5BFF" stroke-width="1.8" stroke-dasharray="2 8" opacity=".9"/>
-<rect x="542" y="296" width="8" height="8" fill="#1E5BFF"/>
-<rect x="543" y="518" width="6" height="6" fill="#1E5BFF" opacity=".85"/>
-<path d="M582 300 L582 512" stroke="#1E5BFF" stroke-width="1.8" stroke-dasharray="2 8" opacity=".9"/>
-<rect x="578" y="296" width="8" height="8" fill="#1E5BFF"/>
-<rect x="579" y="509" width="6" height="6" fill="#1E5BFF" opacity=".85"/>
-<path d="M618 300 L618 500" stroke="#1E5BFF" stroke-width="1.8" stroke-dasharray="2 8" opacity=".9"/>
-<rect x="614" y="296" width="8" height="8" fill="#1E5BFF"/>
-<rect x="614" y="496" width="8" height="8" fill="none" stroke="#1E5BFF" stroke-width="1.8"/>
-<path d="M510 292 L510 246 L552 246" fill="none" stroke="#232320" stroke-width="1" opacity=".55"/>
-<text x="558" y="250" fill="#232320" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" letter-spacing="2.5" opacity=".7">VEGA</text>
-<rect x="300" y="220" width="3" height="3" fill="#1E5BFF" opacity=".25"/>
-<rect x="720" y="230" width="5" height="5" fill="#232320" opacity=".25"/>
-<rect x="280" y="420" width="7" height="7" fill="#1E5BFF" opacity=".25"/>
-<rect x="750" y="430" width="3" height="3" fill="#232320" opacity=".25"/>
-<rect x="320" y="560" width="5" height="5" fill="#1E5BFF" opacity=".25"/>
-<rect x="704" y="552" width="7" height="7" fill="#232320" opacity=".25"/>
-<rect x="512" y="190" width="3" height="3" fill="#1E5BFF" opacity=".25"/>
+  <rect x="72" y="72" width="880" height="880" fill="url(#dots)" opacity=".8"/>
+  <circle cx="512" cy="500" r="328" fill="none" stroke="#1E5BFF" stroke-width="1.2" stroke-dasharray="1 13" opacity=".2"/>
+  <g transform="translate(-164 -29) scale(1.32)">
+<path d="M402 320 L510 562" stroke="#232320" stroke-width="1.2" stroke-dasharray="2 10" opacity=".18"/>
+<path d="M474 320 L582 550" stroke="#232320" stroke-width="1.2" stroke-dasharray="2 10" opacity=".18"/>
+<path d="M546 320 L438 550" stroke="#232320" stroke-width="1.2" stroke-dasharray="2 10" opacity=".18"/>
+<path d="M618 320 L510 562" stroke="#232320" stroke-width="1.2" stroke-dasharray="2 10" opacity=".18"/>
+<path d="M438 320 L546 558" stroke="#232320" stroke-width="1.2" stroke-dasharray="2 10" opacity=".18"/>
+<path d="M582 320 L474 558" stroke="#232320" stroke-width="1.2" stroke-dasharray="2 10" opacity=".18"/>
+<path d="M360 260 C292 302 292 500 390 556 Q512 604 634 556 C732 500 732 302 664 260" fill="none" stroke="#1E5BFF" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M376 320 H648" fill="none" stroke="#1E5BFF" stroke-width="4.8" stroke-linecap="round"/>
+<path d="M402 324 L402 538" stroke="#1E5BFF" stroke-width="2.8" stroke-linecap="round" opacity=".92"/>
+<rect x="396" y="314" width="12" height="12" fill="#1E5BFF"/>
+<rect x="397" y="533" width="10" height="10" fill="none" stroke="#1E5BFF" stroke-width="2.6"/>
+<path d="M438 324 L438 550" stroke="#1E5BFF" stroke-width="2.8" stroke-linecap="round" opacity=".92"/>
+<rect x="432" y="314" width="12" height="12" fill="#1E5BFF"/>
+<rect x="434" y="546" width="8" height="8" fill="#1E5BFF"/>
+<path d="M474 324 L474 558" stroke="#1E5BFF" stroke-width="2.8" stroke-linecap="round" opacity=".92"/>
+<rect x="468" y="314" width="12" height="12" fill="#1E5BFF"/>
+<rect x="470" y="554" width="8" height="8" fill="#1E5BFF"/>
+<path d="M510 324 L510 562" stroke="#1E5BFF" stroke-width="2.8" stroke-linecap="round" opacity=".92"/>
+<rect x="504" y="314" width="12" height="12" fill="#1E5BFF"/>
+<circle cx="510" cy="567" r="9" fill="#F7F5EE" stroke="#89891F" stroke-width="3"/>
+<circle cx="510" cy="567" r="3" fill="#89891F"/>
+<path d="M546 324 L546 558" stroke="#1E5BFF" stroke-width="2.8" stroke-linecap="round" opacity=".92"/>
+<rect x="540" y="314" width="12" height="12" fill="#1E5BFF"/>
+<rect x="542" y="554" width="8" height="8" fill="#1E5BFF"/>
+<path d="M582 324 L582 550" stroke="#1E5BFF" stroke-width="2.8" stroke-linecap="round" opacity=".92"/>
+<rect x="576" y="314" width="12" height="12" fill="#1E5BFF"/>
+<rect x="578" y="546" width="8" height="8" fill="#1E5BFF"/>
+<path d="M618 324 L618 538" stroke="#1E5BFF" stroke-width="2.8" stroke-linecap="round" opacity=".92"/>
+<rect x="612" y="314" width="12" height="12" fill="#1E5BFF"/>
+<rect x="613" y="533" width="10" height="10" fill="none" stroke="#1E5BFF" stroke-width="2.6"/>
+<path d="M510 312 L510 252 L552 252" fill="none" stroke="#232320" stroke-width="1.2" opacity=".6"/>
+<text x="558" y="256" fill="#232320" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" letter-spacing="3" opacity=".72">VEGA</text>
+<rect x="300" y="214" width="3" height="3" fill="#1E5BFF" opacity=".24"/>
+<rect x="722" y="222" width="5" height="5" fill="#232320" opacity=".24"/>
+<rect x="282" y="420" width="7" height="7" fill="#1E5BFF" opacity=".24"/>
+<rect x="748" y="430" width="3" height="3" fill="#232320" opacity=".24"/>
+<rect x="318" y="568" width="5" height="5" fill="#1E5BFF" opacity=".24"/>
+<rect x="706" y="560" width="7" height="7" fill="#232320" opacity=".24"/>
+<rect x="512" y="186" width="3" height="3" fill="#1E5BFF" opacity=".24"/>
 </g>
 </svg>
