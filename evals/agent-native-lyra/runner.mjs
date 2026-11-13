@@ -176,7 +176,7 @@ function summarizeResult(result) {
   return "ok";
 }
 
-async function scenarioDag(report) {
+async function scenarioDag() {
   const s = await fixture("done");
   const calls = [];
   try {
@@ -207,7 +207,7 @@ async function scenarioDag(report) {
   }
 }
 
-async function scenarioBlocker(report) {
+async function scenarioBlocker() {
   const s = await fixture("blocked");
   const calls = [];
   try {
@@ -230,7 +230,7 @@ async function scenarioBlocker(report) {
   }
 }
 
-async function scenarioNeedsInput(report) {
+async function scenarioNeedsInput() {
   const s = await fixture("needs_input");
   const calls = [];
   try {
@@ -252,7 +252,7 @@ async function scenarioNeedsInput(report) {
   }
 }
 
-async function scenarioCancel(report) {
+async function scenarioCancel() {
   const s = await fixture("slow");
   const calls = [];
   try {
@@ -287,7 +287,7 @@ async function scenarioCancel(report) {
   }
 }
 
-async function scenarioInvalid(report) {
+async function scenarioInvalid() {
   const s = await fixture("done");
   const calls = [];
   try {
@@ -327,7 +327,7 @@ async function main() {
   for (const scenario of scenarios) {
     const started = Date.now();
     try {
-      const result = await scenario(report);
+      const result = await scenario();
       report.scenarios.push({ ...result, durationMs: Date.now() - started });
     } catch (error) {
       report.scenarios.push({

@@ -94,7 +94,10 @@ store or another worktree.
 omp plugin link ./packages/omp
 ```
 
-The adapter shells out to the `lyra` binary; it does not own the task graph.
+The adapter exposes six typed tools to the lead agent — `lyra_status`, `lyra_tickets`,
+`lyra_tickets_create`, `lyra_start`, `lyra_wait`, and `lyra_control`. It shells out to the `lyra`
+binary and owns no state. Workers use the separate `lyra-worker.mjs` extension and never call the
+CLI. `/lyra` remains a human/debug escape hatch.
 
 The design and research docs live in `~/.agents/plans/lyra.md` and
 `~/.agents/plans/lyra-research.md`.

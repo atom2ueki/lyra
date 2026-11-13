@@ -175,7 +175,7 @@ export function registerLyraTools(pi, client) {
       cwd: z.string().optional().describe("Project directory; defaults to the session cwd."),
       action: z.enum(["list", "show"]).describe("list = compact ticket list; show = one full ticket."),
       ticketId: z.string().optional().describe("Required when action is show."),
-      details: z.boolean().optional().describe("Include last_error and attempts in a list."),
+      details: z.boolean().optional().describe("Include lastError and attempts in a list."),
     }),
     approval: READ,
     async execute(_id, params, signal, onUpdate, ctx) {

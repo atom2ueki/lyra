@@ -5,7 +5,7 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$here/../.." && pwd)
 bin="${LYRA_BIN:-$root/rust/target/debug/lyra}"
 if [ ! -x "$bin" ]; then
-  cargo build --quiet --manifest-path "$root/rust/Cargo.toml"
+  cargo build --quiet --locked --manifest-path "$root/rust/Cargo.toml"
 fi
 
 tmp=$(mktemp -d)
@@ -25,7 +25,7 @@ cp "$here/fixtures/fake-omp.sh" "$tmp/fake-omp.sh"
 chmod +x "$tmp/fake-omp.sh"
 LYRA_HOME="$home" "$bin" init >/dev/null
 
-prompt='You are testing Lyra through its typed tools. Do not use bash. Follow exactly: (1) call lyra_status; (2) if there are no tickets, call lyra_tickets_create with two independent tickets, keys alpha and beta, each with subject and prompt; (3) call lyra_start with maxParallel 2 and backend headless; (4) call lyra_wait with the returned run id and timeoutMs 5000, then repeat with the returned revision until the run is done or blocked; (5) call lyra_control close with the run id; (6) reply with one JSON object containing runId and final status. Use only the lyra_* tools.'
+prompt='You are testing Lyra through its typed tools. Do not use bash. Follow exactly: (1) call lyra_status; (2) if there are no tickets, call lyra_tickets_create with four tickets: alpha and beta are ready; gamma is blockedBy alpha; delta is blockedBy beta. Give every ticket a subject and prompt; (3) call lyra_start with maxParallel 2 and backend headless; (4) call lyra_wait with the returned run id and timeoutMs 5000, then repeat with the returned revision until the run is done or blocked; (5) call lyra_control close with the run id; (6) reply with one JSON object containing runId and final status. Use only the lyra_* tools.'
 
 out="$tmp/events.jsonl"
 err="$tmp/omp.err"
@@ -57,3 +57,9 @@ if ! grep -q '"status":"closed"' "$out" && ! grep -q '"status": "closed"' "$out"
   echo "live eval failed: run was not closed" >&2
   exit 1
 fi
+for ticket in T-001 T-002 T-003 T-004; do
+  if ! grep -q "\"id\":\"$ticket\",\"status\":\"done\"" "$out"; then
+    echo "live eval failed: $ticket did not finish done" >&2
+    exit 1
+  fi
+done

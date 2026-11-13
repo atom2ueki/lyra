@@ -27,8 +27,9 @@ Scenarios:
 ## Report contract
 
 Each scenario records `status`, `toolCalls`, `invalidCalls`, `directShellCalls`,
-`directStoreMutations`, and `durationMs`. The runner fails when any scenario fails, when a tool
-returns an unexpected error, or when a direct `.lyra` store write is detected.
+`directStoreMutations`, and `durationMs`. The deterministic runner uses no shell to call Lyra and
+never writes the ticket store itself; scenario E asserts that a rejected batch creates zero ticket
+files.
 
 Thresholds for CI: every scenario `pass`; `directShellCalls == 0`; `directStoreMutations == 0`.
 Expected invalid calls are allowed only in scenario D (abort) and E (rejected cycle).
@@ -36,12 +37,11 @@ Expected invalid calls are allowed only in scenario D (abort) and E (rejected cy
 ## Live OMP smoke
 
 The deterministic runner exercises the tool/CLI/worker contract without spending model tokens.
-For the live agent decision check, run a fresh OMP session with the plugin linked and a temporary
-project, then ask it to inspect with `lyra_status`. A recorded live smoke for this iteration returned
-`{"next":"start"}` from a real OMP print session.
+The live runner starts a real OMP print session with the linked plugin, creates a four-ticket DAG,
+starts two workers, waits through the dependent tickets, and closes the run. The recorded run
+finished with all four tickets `done` and status `closed`; no `bash` tool event was emitted.
 
-The live test is intentionally separate: it validates that OMP exposes the tools and that the model
-chooses the typed lifecycle instead of shelling out. Run it with:
+Run the live test with:
 
 ```sh
 bash evals/agent-native-lyra/run-live.sh
