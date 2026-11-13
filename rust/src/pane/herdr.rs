@@ -22,10 +22,17 @@ impl HerdrBackend {
             .output()
             .with_context(|| format!("run herdr {}", args.join(" ")))?;
         if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             bail!(
                 "herdr {} failed: {}",
                 args.join(" "),
-                String::from_utf8_lossy(&output.stderr).trim()
+                match (stdout.is_empty(), stderr.is_empty()) {
+                    (true, true) => "no output".to_string(),
+                    (false, true) => stdout,
+                    (true, false) => stderr,
+                    (false, false) => format!("{stdout} | {stderr}"),
+                }
             );
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -35,6 +42,10 @@ impl HerdrBackend {
         let text = self.run(args)?;
         serde_json::from_str(&text)
             .with_context(|| format!("parse herdr {} output", args.join(" ")))
+    }
+
+    fn agent_exists(&self, name: &str) -> bool {
+        self.json(&["agent", "get", name]).is_ok()
     }
 
     fn pane_from_value(value: &Value) -> Result<PaneHandle> {
@@ -139,7 +150,7 @@ impl PaneBackend for HerdrBackend {
         let mut args = vec![
             "agent".to_string(),
             "start".to_string(),
-            name,
+            name.clone(),
             "--kind".to_string(),
             options.kind.clone(),
             "--pane".to_string(),
@@ -148,7 +159,14 @@ impl PaneBackend for HerdrBackend {
         ];
         args.extend(options.args.iter().cloned());
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        self.run(&refs)?;
+        if let Err(error) = self.run(&refs) {
+            if format!("{error:#}").contains("agent_not_ready") && self.agent_exists(&name) {
+                // herdr's startup gate waits for an interactively ready agent;
+                // a worker that starts its task immediately is healthy, not failed.
+                return Ok(());
+            }
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -266,5 +284,85 @@ impl PaneBackend for HerdrBackend {
             }
         }
         Ok(panes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use super::*;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fake_herdr(dir: &Path, live_agent: bool) -> PathBuf {
+        let live = if live_agent { "yes" } else { "no" };
+        let path = dir.join("fake-herdr.sh");
+        let script = format!(
+            r#"#!/bin/sh
+case "$1 $2" in
+  "agent start")
+    echo '{{"error":{{"code":"agent_not_ready","message":"agent is blocked during startup"}}}}'
+    exit 1
+    ;;
+  "agent get")
+    if [ "{live}" = "yes" ]; then
+      echo '{{"id":"cli:agent:get","result":{{"agent":{{"name":"worker"}}}}}}'
+      exit 0
+    fi
+    echo '{{"error":{{"code":"agent_not_found"}}}}'
+    exit 1
+    ;;
+esac
+echo 'unexpected command' >&2
+exit 2
+"#
+        );
+        fs::write(&path, script).unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    fn pane() -> PaneHandle {
+        PaneHandle {
+            backend: "herdr".to_string(),
+            pane: "w1:p2".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn start(backend: &HerdrBackend) -> Result<()> {
+        backend.start_agent(
+            &pane(),
+            &StartAgentOptions {
+                kind: "omp".to_string(),
+                name: Some("lyra-worker".to_string()),
+                args: vec!["@TASK.md".to_string()],
+            },
+        )
+    }
+
+    #[test]
+    fn agent_not_ready_with_a_live_agent_is_not_a_failure() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_herdr(dir.path(), true);
+        unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
+        start(&HerdrBackend::new()).unwrap();
+    }
+
+    #[test]
+    fn agent_not_ready_without_a_live_agent_fails() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_herdr(dir.path(), false);
+        unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
+        let error = start(&HerdrBackend::new()).unwrap_err();
+        assert!(format!("{error:#}").contains("agent_not_ready"));
     }
 }
