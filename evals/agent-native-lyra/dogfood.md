@@ -28,3 +28,9 @@ session received only the Lyra tools and created a four-ticket DAG (two ready, t
 started two workers, waited through the settled graph, and closed the run. The final
 `lyra_control` result listed `T-001`–`T-004` all `done` with status `closed`; the JSON event stream
 contained no `bash` tool call.
+
+## Final 0.2.0 run
+
+The same real headless worker path was repeated against the installed `lyra 0.2.0` binary after the
+release: `run-final` reached `done` at revision 5 with `T-001` done and summary
+`created worker-ok.txt`; `lyra close --concise` returned `closed`.
