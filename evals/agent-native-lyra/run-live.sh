@@ -53,13 +53,29 @@ for tool in lyra_status lyra_tickets_create lyra_start lyra_wait lyra_control; d
     exit 1
   fi
 done
-if ! grep -q '"status":"closed"' "$out" && ! grep -q '"status": "closed"' "$out"; then
-  echo "live eval failed: run was not closed" >&2
-  exit 1
-fi
-for ticket in T-001 T-002 T-003 T-004; do
-  if ! grep -q "\"id\":\"$ticket\",\"status\":\"done\"" "$out"; then
-    echo "live eval failed: $ticket did not finish done" >&2
-    exit 1
-  fi
-done
+
+python3 - "$out" <<'PY'
+import json
+import sys
+
+last = None
+with open(sys.argv[1]) as handle:
+    for line in handle:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "tool_execution_end" and event.get("toolName") == "lyra_control":
+            last = event
+if last is None:
+    raise SystemExit("live eval failed: no lyra_control result")
+details = last["result"]["details"]
+if details.get("status") != "closed":
+    raise SystemExit(f"live eval failed: run status {details.get('status')}")
+tickets = details.get("tickets", [])
+if len(tickets) != 4 or not all(ticket.get("status") == "done" for ticket in tickets):
+    raise SystemExit(f"live eval failed: tickets {tickets}")
+if any(str(ticket.get("id", "")).startswith("T-") for ticket in tickets):
+    raise SystemExit(f"live eval failed: numeric ticket ids {tickets}")
+print("live tickets:", ", ".join(ticket["id"] for ticket in tickets))
+PY

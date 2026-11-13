@@ -155,7 +155,7 @@ export default function lyraWorkerExtension(pi) {
       reason: z.string().describe('Why this ticket is necessary.'),
       subject: z.string().optional().describe('One-line subject for a new ticket.'),
       prompt: z.string().optional().describe('Full prompt for the new ticket.'),
-      existingId: z.string().optional().describe('Existing ticket id such as T-004.'),
+      existingId: z.string().optional().describe('Existing ticket id such as QuietHarbor.'),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const error = (text) => ({ content: [{ type: 'text', text }], isError: true });

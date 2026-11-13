@@ -104,12 +104,21 @@ fn creates_a_batch_dag_and_reports_agent_status() {
         .iter()
         .map(|item| item["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["T-001", "T-002", "T-003", "T-004"]);
+    assert_eq!(ids.len(), 4);
+    for id in &ids {
+        let first = id.chars().next().unwrap();
+        assert!(
+            first.is_ascii_uppercase(),
+            "ticket id is not a word name: {id}"
+        );
+        assert!(!id.starts_with("T-"), "ticket id is still numeric: {id}");
+    }
+    let (core, ui, docs, release) = (ids[0], ids[1], ids[2], ids[3]);
 
     let status = json(&run(&fixture, &["status", "--json", "--concise"], None));
     assert_eq!(status["schemaVersion"], 1);
     assert_eq!(status["next"], "start");
-    assert_eq!(status["graph"]["ready"][0]["id"], "T-001");
+    assert_eq!(status["graph"]["ready"][0]["id"], core);
     assert_eq!(status["graph"]["ready"][0]["subject"], "Core");
     let blocked: Vec<&str> = status["graph"]["blocked"]
         .as_array()
@@ -117,43 +126,46 @@ fn creates_a_batch_dag_and_reports_agent_status() {
         .iter()
         .map(|item| item["id"].as_str().unwrap())
         .collect();
-    assert_eq!(blocked, ["T-002", "T-003", "T-004"]);
+    let mut actual_blocked = blocked;
+    let mut expected_blocked = vec![ui, docs, release];
+    actual_blocked.sort_unstable();
+    expected_blocked.sort_unstable();
+    assert_eq!(actual_blocked, expected_blocked);
     assert!(status["graph"].get("modelCatalog").is_none());
 
     let listed = json(&run(&fixture, &["tickets", "list", "--json"], None));
-    assert_eq!(listed.as_array().unwrap().len(), 4);
-    assert_eq!(listed[0]["subject"], "Core");
-    assert_eq!(listed[0]["ready"], true);
+    let listed = listed.as_array().unwrap();
+    assert_eq!(listed.len(), 4);
+    let core_listed = listed
+        .iter()
+        .find(|ticket| ticket["id"] == core)
+        .expect("listed core ticket");
+    assert_eq!(core_listed["subject"], "Core");
+    assert_eq!(core_listed["ready"], true);
 
-    let shown = json(&run(
-        &fixture,
-        &["tickets", "show", "T-001", "--json"],
-        None,
-    ));
+    let show_args = vec!["tickets", "show", core, "--json"];
+    let shown = json(&run(&fixture, &show_args, None));
     assert_eq!(shown["prompt"], "Build core");
     assert_eq!(shown["acceptance"], "Core works");
 
-    let not_ready = run(
-        &fixture,
-        &[
-            "conduct",
-            "start",
-            "--dry-run",
-            "--json",
-            "--concise",
-            "--backend",
-            "headless",
-            "--ticket",
-            "T-002",
-        ],
-        None,
-    );
+    let not_ready_args = vec![
+        "conduct",
+        "start",
+        "--dry-run",
+        "--json",
+        "--concise",
+        "--backend",
+        "headless",
+        "--ticket",
+        ui,
+    ];
+    let not_ready = run(&fixture, &not_ready_args, None);
     assert!(!not_ready.status.success());
     let not_ready_body: serde_json::Value = serde_json::from_slice(&not_ready.stdout).unwrap();
     assert_eq!(not_ready_body["error"]["code"], "invalid_input");
     let message = not_ready_body["error"]["message"].as_str().unwrap();
-    assert!(message.contains("T-002"));
-    assert!(message.contains("T-001"));
+    assert!(message.contains(ui));
+    assert!(message.contains(core));
 
     let started = json(&run(
         &fixture,
@@ -256,54 +268,52 @@ fn start_selects_repeated_tickets_and_rejects_not_ready_ones() {
         {"key":"three","subject":"Three","prompt":"Three","blockedBy":[]}
       ]
     }"#;
-    assert!(
-        run(
-            &fixture,
-            &["tickets", "create", "--file", "-", "--json"],
-            Some(batch)
-        )
-        .status
-        .success()
-    );
-    let selected = json(&run(
+    let created = json(&run(
         &fixture,
-        &[
-            "conduct",
-            "start",
-            "--dry-run",
-            "--json",
-            "--concise",
-            "--backend",
-            "headless",
-            "--ticket",
-            "T-001",
-            "--ticket",
-            "T-003",
-        ],
-        None,
+        &["tickets", "create", "--file", "-", "--json"],
+        Some(batch),
     ));
+    let ids: Vec<&str> = created["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 3);
+    let selected_args = vec![
+        "conduct",
+        "start",
+        "--dry-run",
+        "--json",
+        "--concise",
+        "--backend",
+        "headless",
+        "--ticket",
+        ids[0],
+        "--ticket",
+        ids[2],
+    ];
+    let selected = json(&run(&fixture, &selected_args, None));
     assert_eq!(
         selected["plannedTickets"],
-        serde_json::json!(["T-001", "T-003"])
+        serde_json::json!([ids[0], ids[2]])
     );
-    let selected_comma = json(&run(
-        &fixture,
-        &[
-            "conduct",
-            "start",
-            "--dry-run",
-            "--json",
-            "--concise",
-            "--backend",
-            "headless",
-            "--tickets",
-            "T-001,T-003",
-        ],
-        None,
-    ));
+    let comma_ids = format!("{},{}", ids[0], ids[2]);
+    let comma_args = vec![
+        "conduct",
+        "start",
+        "--dry-run",
+        "--json",
+        "--concise",
+        "--backend",
+        "headless",
+        "--tickets",
+        comma_ids.as_str(),
+    ];
+    let selected_comma = json(&run(&fixture, &comma_args, None));
     assert_eq!(
         selected_comma["plannedTickets"],
-        serde_json::json!(["T-001", "T-003"])
+        serde_json::json!([ids[0], ids[2]])
     );
     let run_id = selected["runId"].as_str().unwrap();
     let stopped = json(&run(

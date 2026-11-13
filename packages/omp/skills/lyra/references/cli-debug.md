@@ -7,7 +7,7 @@ Use this only for human/debug commands. Agent work goes through the typed `lyra_
 ```sh
 lyra status --json --concise       # graph + latest run + next action
 lyra tickets list --json           # ticket summaries
-lyra tickets show T-001 --json     # prompt, acceptance, blockers, result
+lyra tickets show QuietHarbor --json     # prompt, acceptance, blockers, result
 lyra tickets create --file - --json # batch DAG from stdin
 lyra conduct start --json --concise [--ticket ID]... [--tickets ID,ID]
 lyra conduct wait --run RUN --json --concise [--after-revision N] [--timeout-ms 30000]

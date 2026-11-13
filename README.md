@@ -41,7 +41,7 @@ lyra upgrade
 ```
 
 The installer uses `~/.local/bin` by default and verifies the release `SHA256SUMS` before replacing
-the binary. Override with `LYRA_INSTALL_DIR`, pin a tag with `LYRA_VERSION=0.2.0`, or use
+the binary. Override with `LYRA_INSTALL_DIR`, pin a tag with `LYRA_VERSION=0.3.0`, or use
 `LYRA_GITHUB_TOKEN` for a private fork (`gh` is required for authenticated asset downloads).
 
 From source:
@@ -70,12 +70,15 @@ lyra conduct start --max 2
 lyra conduct monitor
 lyra conduct resume --run <run-id>
 lyra report
-lyra logs T-001
+lyra logs QuietHarbor
 lyra close
 ```
 
 `LYRA_HOME` overrides `~/.lyra`; `LYRA_PANE_BACKEND=herdr|ghostty|headless` overrides detection;
 `LYRA_OMP_BIN` overrides the `omp` binary for tests.
+
+New tickets use readable `AdjectiveNoun` ids such as `QuietHarbor`; legacy `T-001` ids from
+imported stores remain valid.
 
 ## Worker contract
 

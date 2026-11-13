@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -99,16 +100,12 @@ pub fn write_ticket(store: &Path, ticket: &Ticket) -> Result<PathBuf> {
 }
 
 pub fn next_ticket_id(store: &Path) -> Result<String> {
-    let tickets = list_tickets(store).unwrap_or_default();
-    let mut max = 0u64;
-    for ticket in tickets {
-        if let Some(raw) = ticket.id.strip_prefix("T-")
-            && let Ok(value) = raw.parse::<u64>()
-        {
-            max = max.max(value);
-        }
-    }
-    Ok(format!("T-{:03}", max + 1))
+    let existing: HashSet<String> = list_tickets(store)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ticket| ticket.id)
+        .collect();
+    Ok(crate::names::generate_ticket_id(&existing))
 }
 
 pub struct NewTicket {

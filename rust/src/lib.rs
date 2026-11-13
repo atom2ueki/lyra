@@ -5,6 +5,7 @@ pub mod config;
 pub mod graph;
 pub mod import;
 pub mod models;
+pub mod names;
 pub mod project;
 pub mod schema;
 pub mod store;
