@@ -1,5 +1,6 @@
 // Agent-facing Lyra tools. These are domain operations, not CLI flags: the adapter owns argument
 // construction, bounded waits, cancellation, and the concise result projection.
+// Extension execute order is (callId, params, signal, onUpdate, context).
 
 import { LyraCliError } from "./lyra-cli.mjs";
 
