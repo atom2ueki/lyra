@@ -803,3 +803,111 @@ fn non_omp_harness_uses_result_md_fallback() {
     assert_eq!(state.tickets[&ticket.id].status, RunTicketStatus::Done);
     assert_eq!(list_tickets(&store).unwrap()[0].status, TicketStatus::Done);
 }
+
+struct FailingStartBackend;
+
+impl lyra::pane::PaneBackend for FailingStartBackend {
+    fn name(&self) -> &str {
+        "failing"
+    }
+
+    fn capabilities(&self) -> lyra::pane::Capabilities {
+        lyra::pane::Capabilities {
+            splits: true,
+            start_agent: true,
+            ..lyra::pane::Capabilities::default()
+        }
+    }
+
+    fn anchor(&self) -> anyhow::Result<lyra::pane::PaneHandle> {
+        Ok(lyra::pane::PaneHandle {
+            backend: "failing".to_string(),
+            pane: "anchor".to_string(),
+            ..Default::default()
+        })
+    }
+
+    fn split(
+        &self,
+        _anchor: &lyra::pane::PaneHandle,
+        _options: &lyra::pane::SplitOptions,
+    ) -> anyhow::Result<lyra::pane::PaneHandle> {
+        Ok(lyra::pane::PaneHandle {
+            backend: "failing".to_string(),
+            pane: "worker".to_string(),
+            ..Default::default()
+        })
+    }
+
+    fn start_agent(
+        &self,
+        _pane: &lyra::pane::PaneHandle,
+        _options: &lyra::pane::StartAgentOptions,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("agent start exploded")
+    }
+}
+
+#[test]
+fn failed_launch_releases_the_worktree_and_branch() {
+    let _guard = lock_env();
+    let dir = repo();
+    let store = dir.path().join(".lyra/store");
+    ensure_store(&store).unwrap();
+    let ticket = create_ticket(
+        &store,
+        NewTicket {
+            project_id: "test-project".to_string(),
+            subject: "Implement feature".to_string(),
+            prompt: "Implement the feature.".to_string(),
+            blocked_by: Vec::new(),
+            priority: 2,
+            labels: Vec::new(),
+            model_class: None,
+            acceptance: None,
+            plan: None,
+            parent: None,
+            origin: Some("test".to_string()),
+            harness: Some("omp".to_string()),
+        },
+    )
+    .unwrap();
+    unsafe { std::env::set_var("LYRA_OMP_BIN", fake_omp(dir.path())) };
+    let started = start_run(StartOptions {
+        repo: dir.path().to_path_buf(),
+        store: store.clone(),
+        project_id: "test-project".to_string(),
+        config: LyraConfig {
+            max_parallel: 1,
+            max_per_provider: HashMap::new(),
+            approval_posture: ApprovalPosture::Ask,
+            merge: MergeMode::Auto,
+        },
+        backend: Some(Box::new(FailingStartBackend)),
+        max_parallel: None,
+        max_seconds: Some(10),
+        ticket_ids: Vec::new(),
+        base_ref: None,
+        dry_run: false,
+        run_id: Some("run-fail".to_string()),
+        model_policy: None,
+        models: Some(Vec::new()),
+        usage: Some(Vec::new()),
+    })
+    .unwrap();
+    let run_ticket = started.tickets.get(&ticket.id).unwrap();
+    assert_eq!(run_ticket.status, RunTicketStatus::Failed);
+    assert!(!Path::new(&run_ticket.worktree).exists());
+    let branches = Command::new("git")
+        .args(["branch", "--list", run_ticket.branch.as_str()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&branches.stdout).trim().is_empty(),
+        "branch left behind: {}",
+        run_ticket.branch
+    );
+    let tickets = list_tickets(&store).unwrap();
+    assert_eq!(tickets[0].status, TicketStatus::Todo);
+}

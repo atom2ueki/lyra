@@ -30,8 +30,8 @@ use crate::worker::{
     write_response, write_task_brief,
 };
 use crate::worktree::{
-    WorktreeInfo, close_run_worktrees, create_worktree, detect_base_ref, remove_worktree,
-    resume_worktree,
+    WorktreeInfo, close_run_worktrees, create_worktree, delete_unchanged_branch, detect_base_ref,
+    remove_worktree, resume_worktree,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -577,6 +577,8 @@ fn launch_ticket(
                 && let Some(tree) = &worktree
             {
                 let _ = remove_worktree(Path::new(&state.repo), &tree.dir);
+                let _ =
+                    delete_unchanged_branch(Path::new(&state.repo), &tree.branch, &tree.base_head);
             }
             let now = now_iso();
             state.tickets.insert(

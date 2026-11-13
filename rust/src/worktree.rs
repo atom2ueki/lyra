@@ -180,6 +180,21 @@ pub fn remove_worktree(repo: &Path, dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// Delete a run branch whose tip still equals `base_head`: a launch that failed
+/// before the worker could commit anything. Branches with worker commits are
+/// kept for resume and merge. Returns whether the branch was deleted.
+pub fn delete_unchanged_branch(repo: &Path, branch: &str, base_head: &str) -> Result<bool> {
+    let reference = format!("refs/heads/{branch}");
+    let Ok(head) = git(repo, &["rev-parse", "--verify", &reference]) else {
+        return Ok(false);
+    };
+    if head.trim() != base_head {
+        return Ok(false);
+    }
+    git(repo, &["branch", "-D", branch])?;
+    Ok(true)
+}
+
 pub fn close_run_worktrees(
     repo: &Path,
     run_dir: &Path,
@@ -223,7 +238,9 @@ pub fn close_run_worktrees(
 
 #[cfg(test)]
 mod tests {
-    use super::safe_segment;
+    use std::fs;
+
+    use super::{delete_unchanged_branch, git, safe_segment};
 
     #[test]
     fn path_segments_cannot_escape_the_run_directory() {
@@ -231,5 +248,43 @@ mod tests {
         assert_eq!(safe_segment("."), "_");
         assert_eq!(safe_segment("../T-001"), "..-T-001");
         assert_eq!(safe_segment("run/../../x"), "run-..-..-x");
+    }
+
+    #[test]
+    fn unchanged_run_branch_is_deleted_but_committed_work_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git(repo, &["init", "-q"]).unwrap();
+        git(repo, &["config", "user.email", "test@example.com"]).unwrap();
+        git(repo, &["config", "user.name", "Test"]).unwrap();
+        fs::write(repo.join("README.md"), "# test\n").unwrap();
+        git(repo, &["add", "README.md"]).unwrap();
+        git(repo, &["commit", "-qm", "init"]).unwrap();
+        let head = git(repo, &["rev-parse", "HEAD"]).unwrap();
+        let base_head = head.trim().to_string();
+        git(repo, &["branch", "lyra/run/Ticket"]).unwrap();
+        assert!(delete_unchanged_branch(repo, "lyra/run/Ticket", &base_head).unwrap());
+        assert!(
+            git(
+                repo,
+                &["rev-parse", "--verify", "refs/heads/lyra/run/Ticket"]
+            )
+            .is_err()
+        );
+
+        git(repo, &["branch", "lyra/run/Committed"]).unwrap();
+        git(repo, &["checkout", "-q", "lyra/run/Committed"]).unwrap();
+        fs::write(repo.join("work.txt"), "done\n").unwrap();
+        git(repo, &["add", "work.txt"]).unwrap();
+        git(repo, &["commit", "-qm", "work"]).unwrap();
+        assert!(!delete_unchanged_branch(repo, "lyra/run/Committed", &base_head).unwrap());
+        assert!(
+            git(
+                repo,
+                &["rev-parse", "--verify", "refs/heads/lyra/run/Committed"]
+            )
+            .is_ok()
+        );
+        assert!(!delete_unchanged_branch(repo, "lyra/run/Missing", &base_head).unwrap());
     }
 }
