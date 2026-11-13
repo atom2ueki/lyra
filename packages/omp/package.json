@@ -15,7 +15,6 @@
   "files": [
     "extension",
     "lib",
-    "commands",
     "skills",
     "README.md"
   ]
