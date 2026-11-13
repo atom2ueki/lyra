@@ -812,6 +812,13 @@ fn process_requests(state: &RunState, ticket_id: &str) -> Result<()> {
     Ok(())
 }
 
+fn close_pane(backend: &dyn PaneBackend, pane: &PaneHandle) -> Result<()> {
+    if pane.backend == backend.name() {
+        return backend.close(pane);
+    }
+    crate::pane::backend_by_name(&pane.backend)?.close(pane)
+}
+
 fn settle_worker(state: &mut RunState, ticket_id: &str, backend: &dyn PaneBackend) -> Result<()> {
     let Some(run_ticket) = state.tickets.get(ticket_id).cloned() else {
         return Ok(());
@@ -932,7 +939,7 @@ fn settle_worker(state: &mut RunState, ticket_id: &str, backend: &dyn PaneBacken
         ticket.result = Some(serde_json::to_value(&result)?);
     }
     if let Some(pane) = &run_ticket.pane {
-        let _ = backend.close(pane);
+        let _ = close_pane(backend, pane);
     }
     save_state(state)?;
     Ok(())
@@ -1136,7 +1143,7 @@ pub fn stop_run(run_dir: &Path, backend: Option<Box<dyn PaneBackend>>) -> Result
             continue;
         }
         if let Some(pane) = &run_ticket.pane {
-            let _ = backend.close(pane);
+            let _ = close_pane(backend.as_ref(), pane);
         }
         let _ = release_ticket(
             Path::new(&state.store),

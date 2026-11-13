@@ -120,6 +120,15 @@ pub trait PaneBackend {
     }
 }
 
+pub fn backend_by_name(name: &str) -> Result<Box<dyn PaneBackend>> {
+    match name {
+        "herdr" => Ok(Box::new(herdr::HerdrBackend::new())),
+        "ghostty" => Ok(Box::new(ghostty::GhosttyBackend::new())),
+        "headless" => Ok(Box::new(headless::HeadlessBackend::new())),
+        other => bail!("unknown pane backend: {other}"),
+    }
+}
+
 pub fn select_backend() -> Result<Box<dyn PaneBackend>> {
     let env = std::env::vars().collect::<HashMap<_, _>>();
     select_backend_with_env(&env, std::io::IsTerminal::is_terminal(&std::io::stdout()))
@@ -130,12 +139,8 @@ pub fn select_backend_with_env(
     stdout_is_tty: bool,
 ) -> Result<Box<dyn PaneBackend>> {
     if let Some(explicit) = env.get("LYRA_PANE_BACKEND") {
-        return match explicit.as_str() {
-            "herdr" => Ok(Box::new(herdr::HerdrBackend::new())),
-            "ghostty" => Ok(Box::new(ghostty::GhosttyBackend::new())),
-            "headless" => Ok(Box::new(headless::HeadlessBackend::new())),
-            other => bail!("unknown LYRA_PANE_BACKEND: {other}"),
-        };
+        return backend_by_name(explicit)
+            .map_err(|_| anyhow::anyhow!("unknown LYRA_PANE_BACKEND: {explicit}"));
     }
     if env.get("HERDR_ENV").map(String::as_str) == Some("1") {
         return Ok(Box::new(herdr::HerdrBackend::new()));
