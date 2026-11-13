@@ -71,6 +71,16 @@ function summarizeRun(run) {
   return lines.join("\n");
 }
 
+function nextForGraph(graph, run) {
+  if (run?.tickets?.some((ticket) => ticket.needs_input)) return "resolve_input";
+  if (["running", "starting"].includes(run?.status)) return "wait";
+  if (run?.tickets?.some((ticket) => ["running", "starting"].includes(ticket.status))) return "wait";
+  if ((graph?.ready ?? []).length > 0) return "start";
+  const open = (graph?.todo ?? 0) + (graph?.in_progress ?? 0);
+  if (open > 0) return "blocked";
+  return "done";
+}
+
 function nextFromRun(run) {
   if (!run) return "start";
   if (run.tickets.some((ticket) => ticket.needs_input)) return "resolve_input";
@@ -134,11 +144,12 @@ export function registerLyraTools(pi, client) {
         }
         const ready = status.graph?.ready ?? [];
         const blocked = status.graph?.blocked ?? [];
+        const next = params.runId ? nextForGraph(status.graph, status.run) : status.next;
         const summary = [
           `Project ${status.projectId}: ${status.graph?.total ?? 0} tickets, ${ready.length} ready, ${blocked.length} blocked`,
           ready.length ? `Ready:\n${summarizeTickets(ready)}` : "Ready: none",
           summarizeRun(status.run),
-          `Next: ${status.next}`,
+          `Next: ${next}`,
         ].join("\n");
         return success(summary, {
           action: "status",
@@ -146,7 +157,7 @@ export function registerLyraTools(pi, client) {
           projectId: status.projectId,
           graph: status.graph,
           run: status.run,
-          next: status.next,
+          next,
         });
       } catch (error) {
         return clientError(error, "lyra_status");

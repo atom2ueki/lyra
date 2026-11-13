@@ -184,6 +184,18 @@ test("status returns a concise summary and structured details", async () => {
   }
 });
 
+test("status with an explicit run recomputes next for that run", async () => {
+  const s = await setup();
+  try {
+    const result = await call(s.tools.get("lyra_status"), { runId: "run-1" });
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details.next, "wait");
+    assert.equal(result.details.run.runId, "run-1");
+  } finally {
+    await rm(s.dir, { recursive: true, force: true });
+  }
+});
+
 test("ticket creation sends JSON on stdin and maps created ids", async () => {
   const s = await setup();
   try {
