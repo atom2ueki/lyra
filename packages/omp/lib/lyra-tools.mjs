@@ -358,7 +358,10 @@ export function registerLyraTools(pi, client) {
           onUpdate?.(
             text(`Waiting for Lyra run${params.runId ? ` ${params.runId}` : ""} (revision ${params.afterRevision ?? "current"})…`),
           );
-          last = await client.json(waitArgs(params, slice), options(params, ctx, signal));
+          last = await client.json(waitArgs(params, slice), {
+            ...options(params, ctx, signal),
+            timeoutMs: Math.min(slice + 1_000, 30_000),
+          });
           if (!last.timedOut || Date.now() >= deadline) break;
         }
         const next = nextFromRun(last);
