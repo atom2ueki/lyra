@@ -59,7 +59,7 @@ function summarizeTickets(tickets) {
 function summarizeRun(run) {
   if (!run) return "Run: none";
   const active = run.tickets.filter((ticket) => ["running", "starting"].includes(ticket.status));
-  const blocked = run.tickets.filter((ticket) => ticket.needs_input || ticket.status === "blocked");
+  const blocked = run.tickets.filter((ticket) => ticket.needsInput || ticket.status === "blocked");
   const lines = [
     `Run: ${run.runId} [${run.status}] revision ${run.revision}`,
     `Tickets: ${run.tickets.length} total, ${active.length} active, ${blocked.length} blocked/input`,
@@ -73,7 +73,7 @@ function summarizeRun(run) {
 }
 
 function nextForGraph(graph, run) {
-  if (run?.tickets?.some((ticket) => ticket.needs_input)) return "resolve_input";
+  if (run?.tickets?.some((ticket) => ticket.needsInput)) return "resolve_input";
   if (["running", "starting"].includes(run?.status)) return "wait";
   if (run?.tickets?.some((ticket) => ["running", "starting"].includes(ticket.status))) return "wait";
   if ((graph?.ready ?? []).length > 0) return "start";
@@ -84,7 +84,7 @@ function nextForGraph(graph, run) {
 
 function nextFromRun(run) {
   if (!run) return "start";
-  if (run.tickets.some((ticket) => ticket.needs_input)) return "resolve_input";
+  if (run.tickets.some((ticket) => ticket.needsInput)) return "resolve_input";
   if (["running", "starting"].includes(run.status)) return "wait";
   if (run.tickets.some((ticket) => ["running", "starting"].includes(ticket.status))) return "wait";
   if (run.status === "done") return "done";
@@ -196,9 +196,9 @@ export function registerLyraTools(pi, client) {
           );
           const summary = [
             `${ticket.id} ${ticket.subject} [${ticket.status}]`,
-            `Priority: ${ticket.priority}; blocked by: ${ticket.blocked_by?.length ? ticket.blocked_by.join(", ") : "none"}`,
+            `Priority: ${ticket.priority}; blocked by: ${ticket.blockedBy?.length ? ticket.blockedBy.join(", ") : "none"}`,
             `Attempts: ${ticket.attempts ?? 0}`,
-            ticket.last_error ? `Last error: ${shorten(ticket.last_error, 240)}` : "",
+            ticket.lastError ? `Last error: ${shorten(ticket.lastError, 240)}` : "",
             `Prompt: ${shorten(ticket.prompt, 500)}`,
             ticket.acceptance ? `Acceptance: ${shorten(ticket.acceptance, 300)}` : "",
           ]
@@ -366,7 +366,7 @@ export function registerLyraTools(pi, client) {
           if (!last.timedOut || Date.now() >= deadline) break;
         }
         const next = nextFromRun(last);
-        const needsInput = last.tickets?.find((ticket) => ticket.needs_input);
+        const needsInput = last.tickets?.find((ticket) => ticket.needsInput);
         const summary = [
           `Run ${last.runId} [${last.status}] revision ${last.revision}${last.timedOut ? " (timed out)" : ""}`,
           summarizeRun(last),

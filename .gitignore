@@ -6,3 +6,7 @@ node_modules/
 rust/target/
 
 dist/
+
+# generated eval reports
+report.json
+evals/agent-native-lyra/report.json

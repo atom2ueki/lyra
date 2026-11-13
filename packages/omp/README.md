@@ -15,7 +15,8 @@ The lead agent uses six domain tools; none accepts a raw CLI argument array:
 | `lyra_wait` | write | Bounded wait; returns `timedOut` without stopping the run |
 | `lyra_control` | write | Stop or close an explicit `runId` |
 
-The adapter shells out to the `lyra` binary and owns no state. Install the core CLI first
+This is a breaking change from `0.1.x`: the generic `lyra_conduct` tool is gone; use the six tools
+above. The adapter shells out to the `lyra` binary and owns no state. Install the core CLI first
 (`cd rust && cargo install --path .`), or set `LYRA_BIN` to an absolute command.
 
 ```sh

@@ -87,6 +87,8 @@ enum Command {
         run: Option<String>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        concise: bool,
     },
     Logs {
         ticket: String,
@@ -1070,10 +1072,10 @@ Plan:
                 }
             }
         },
-        Some(Command::Close { run, json }) => {
+        Some(Command::Close { run, json, concise }) => {
             let context = resolve_store(None, None)?;
             let state = close_run(&resolve_run_dir(&context.root, run)?)?;
-            print_run(&state, json, false)?;
+            print_run(&state, json, concise)?;
         }
         Some(Command::Logs { ticket, run, lines }) => {
             let context = resolve_store(None, None)?;

@@ -1,6 +1,6 @@
 # Agent-native Lyra — typed tools over a concise CLI contract
 
-**Status:** PLAN approved 2026-11-13. Phase 1–3 complete; Phase 4 next.
+**Status:** PLAN approved 2026-11-13. Phase 1–4 complete (typed CLI, tools, skill, eval, real headless dogfood).
 
 This plan supersedes the assumption that the OMP adapter should expose the CLI surface to the model.
 It keeps `lyra` as the source of truth; it changes the interface the agent sees.

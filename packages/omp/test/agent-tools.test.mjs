@@ -72,7 +72,7 @@ case "$1 $2" in
     printf '%s\\n' '[{"id":"T-001","subject":"One","status":"todo","priority":2,"blockedBy":[],"ready":true,"attempts":0}]'
     ;;
   "tickets show")
-    printf '%s\\n' '{"id":"T-001","subject":"One","prompt":"Do it","status":"todo","priority":2,"blockedBy":[],"attempts":0}'
+    printf '%s\\n' '{"id":"T-001","subject":"One","prompt":"Do it","status":"todo","priority":2,"blockedBy":["T-000"],"attempts":1,"lastError":"previous"}'
     ;;
   "tickets create")
     cat > "$MOCK_STDIN"
@@ -191,6 +191,19 @@ test("status with an explicit run recomputes next for that run", async () => {
     assert.equal(result.isError, undefined);
     assert.equal(result.details.next, "wait");
     assert.equal(result.details.run.runId, "run-1");
+  } finally {
+    await rm(s.dir, { recursive: true, force: true });
+  }
+});
+
+test("ticket show reads camelCase ticket fields", async () => {
+  const s = await setup();
+  try {
+    const result = await call(s.tools.get("lyra_tickets"), { action: "show", ticketId: "T-001" });
+    assert.equal(result.isError, undefined);
+    assert.match(result.content[0].text, /blocked by: T-000/);
+    assert.match(result.content[0].text, /Last error: previous/);
+    assert.equal(result.details.ticket.blockedBy[0], "T-000");
   } finally {
     await rm(s.dir, { recursive: true, force: true });
   }
