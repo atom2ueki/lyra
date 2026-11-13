@@ -9,7 +9,7 @@ The lead agent uses six domain tools; none accepts a raw CLI argument array:
 | Tool | Approval | Purpose |
 |---|---|---|
 | `lyra_status` | read | Project graph + latest/named run summary + next action |
-| `lyra_tickets` | read | List tickets or show one ticket's prompt/acceptance/result |
+| `lyra_tickets` | write | List/show tickets, or update a `todo`/`failed` ticket (subject, prompt, acceptance, priority, blockedBy, labels) |
 | `lyra_tickets_create` | write | Create a validated batch of tickets with dependency keys |
 | `lyra_start` | write | Start a run and return a `runId` immediately |
 | `lyra_wait` | write | Bounded wait; returns `timedOut` without stopping the run |

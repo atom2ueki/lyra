@@ -65,7 +65,8 @@ lyra import omp-kanban ~/Documents/atom2ueki/omp-kanban/.omp/kanban
 lyra conduct status
 lyra models
 lyra graph --format mermaid
-lyra add "a new ticket"
+lyra tickets update QuietHarbor --prompt "new prompt" --priority 4 --json
+lyra tickets update QuietHarbor --blocked-by SwiftFalcon --json
 lyra conduct start --max 2
 lyra conduct monitor
 lyra conduct resume --run <run-id>
@@ -102,10 +103,10 @@ store or another worktree.
 omp plugin link ./packages/omp
 ```
 
-The adapter exposes six typed tools to the lead agent — `lyra_status`, `lyra_tickets`,
-`lyra_tickets_create`, `lyra_start`, `lyra_wait`, and `lyra_control`. It shells out to the `lyra`
-binary and owns no state. Workers use the separate `lyra-worker.mjs` extension and never call the
-CLI. `/lyra` remains a human/debug escape hatch.
+The adapter exposes six typed tools to the lead agent — `lyra_status`, `lyra_tickets`
+(list/show/read or update/write), `lyra_tickets_create`, `lyra_start`, `lyra_wait`, and
+`lyra_control`. It shells out to the `lyra` binary and owns no state. Workers use the separate
+`lyra-worker.mjs` extension and never call the CLI. `/lyra` remains a human/debug escape hatch.
 
 The design and research docs live in `~/.agents/plans/lyra.md` and
 `~/.agents/plans/lyra-research.md`.

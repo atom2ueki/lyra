@@ -14,6 +14,7 @@ const chain = () => {
     positive: () => schema,
     min: () => schema,
     max: () => schema,
+    nullable: () => schema,
   };
   return schema;
 };
@@ -80,6 +81,9 @@ case "$1 $2" in
     ;;
   "conduct start")
     printf '%s\\n' '{"schemaVersion":1,"runId":"run-1","status":"running","revision":2,"backend":"headless","baseRef":"main","createdAt":"now","updatedAt":"now","plannedTickets":["T-001"],"tickets":[]}'
+    ;;
+  "tickets update")
+    printf '%s\\n' '{"id":"T-001","subject":"New subject","prompt":"Do it better","status":"todo","priority":4,"blockedBy":["T-002"],"labels":["backend"],"attempts":0}'
     ;;
   "conduct wait")
     if [ "\${MOCK_WAIT_SLEEP:-0}" = "1" ]; then
@@ -163,7 +167,7 @@ test("registers six typed tools and keeps /lyra as a human command", async () =>
     assert.equal(s.commands.has("lyra"), true);
     for (const [name, tool] of s.tools) {
       assert.equal(Object.hasOwn(tool.parameters.shape, "args"), false);
-      assert.equal(tool.approval, name === "lyra_status" || name === "lyra_tickets" ? "read" : "write");
+      assert.equal(tool.approval, name === "lyra_status" ? "read" : "write");
     }
   } finally {
     await rm(s.dir, { recursive: true, force: true });
@@ -204,6 +208,50 @@ test("ticket show reads camelCase ticket fields", async () => {
     assert.match(result.content[0].text, /blocked by: T-000/);
     assert.match(result.content[0].text, /Last error: previous/);
     assert.equal(result.details.ticket.blockedBy[0], "T-000");
+  } finally {
+    await rm(s.dir, { recursive: true, force: true });
+  }
+});
+
+test("ticket update sends exact CLI flags and returns details.ticket", async () => {
+  const s = await setup();
+  try {
+    const result = await call(s.tools.get("lyra_tickets"), {
+      action: "update",
+      ticketId: "T-001",
+      subject: "New subject",
+      prompt: "Do it better",
+      acceptance: null,
+      priority: 4,
+      blockedBy: ["T-002"],
+      labels: ["backend"],
+    });
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details.action, "update");
+    assert.equal(result.details.ticket.subject, "New subject");
+    assert.equal(result.details.ticket.blockedBy[0], "T-002");
+    assert.match(result.content[0].text, /Updated T-001 New subject \[todo\]/);
+    const log = await readFile(s.log, "utf8");
+    assert.match(
+      log,
+      /^tickets update T-001 --json --subject New subject --prompt Do it better --clear-acceptance --priority 4 --blocked-by T-002 --label backend$/m,
+    );
+  } finally {
+    await rm(s.dir, { recursive: true, force: true });
+  }
+});
+
+test("ticket update validates ticketId and requires a writable field", async () => {
+  const s = await setup();
+  try {
+    const missing = await call(s.tools.get("lyra_tickets"), { action: "update", subject: "x" });
+    assert.equal(missing.isError, true);
+    assert.equal(missing.details.code, "invalid_input");
+
+    const empty = await call(s.tools.get("lyra_tickets"), { action: "update", ticketId: "T-001" });
+    assert.equal(empty.isError, true);
+    assert.equal(empty.details.code, "invalid_input");
+    assert.equal(await readFile(s.log, "utf8").catch(() => ""), "", "must not reach the CLI");
   } finally {
     await rm(s.dir, { recursive: true, force: true });
   }

@@ -170,25 +170,85 @@ export function registerLyraTools(pi, client) {
     name: "lyra_tickets",
     label: "Lyra tickets",
     description:
-      "List Lyra tickets or show one ticket's prompt, acceptance, blockers, and result. Read-only. Use list to inspect the DAG; use show before deciding how to unblock or resume a ticket.",
+      "List Lyra tickets, show one ticket's prompt, acceptance, blockers, and result, or update an editable (todo/failed) ticket. list/show are read-only; update is a write that replaces whole lists for blockedBy and labels.",
     parameters: z.object({
       cwd: z.string().optional().describe("Project directory; defaults to the session cwd."),
-      action: z.enum(["list", "show"]).describe("list = compact ticket list; show = one full ticket."),
-      ticketId: z.string().optional().describe("Required when action is show."),
+      action: z.enum(["list", "show", "update"]).describe(
+        "list = compact ticket list; show = one full ticket; update = edit a todo/failed ticket.",
+      ),
+      ticketId: z.string().optional().describe("Required when action is show or update."),
       details: z.boolean().optional().describe("Include lastError and attempts in a list."),
+      subject: z.string().optional().describe("Update: new subject."),
+      prompt: z.string().optional().describe("Update: new prompt."),
+      acceptance: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("Update: new acceptance text; null clears it."),
+      priority: z.number().int().min(0).max(4).optional().describe("Update: new priority."),
+      blockedBy: z
+        .array(z.string())
+        .optional()
+        .describe("Update: replaces the whole dependency list; an empty array clears it."),
+      labels: z
+        .array(z.string())
+        .optional()
+        .describe("Update: replaces the whole label list; an empty array clears it."),
     }),
-    approval: READ,
+    approval: WRITE,
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (params.action === "show" && !params.ticketId) {
+      if (params.action !== "list" && !params.ticketId) {
         return failed(
-          new LyraCliError("invalid_input", "ticketId is required when action is show", {
-            next: "Call lyra_tickets list first, then show a returned ticket id.",
+          new LyraCliError("invalid_input", `ticketId is required when action is ${params.action}`, {
+            next: "Call lyra_tickets list first, then use a returned ticket id.",
           }),
           "lyra_tickets",
         );
       }
+      if (params.action === "update") {
+        const writable = [params.subject, params.prompt, params.acceptance, params.priority, params.blockedBy, params.labels];
+        if (writable.every((field) => field === undefined)) {
+          return failed(
+            new LyraCliError("invalid_input", "Provide at least one field to update", {
+              next: "Pass subject, prompt, acceptance, priority, blockedBy, or labels.",
+            }),
+            "lyra_tickets",
+          );
+        }
+      }
       try {
         const call = options(params, ctx, signal);
+        if (params.action === "update") {
+          const args = ["tickets", "update", params.ticketId, "--json"];
+          if (params.subject !== undefined) args.push("--subject", params.subject);
+          if (params.prompt !== undefined) args.push("--prompt", params.prompt);
+          if (typeof params.acceptance === "string") args.push("--acceptance", params.acceptance);
+          if (params.acceptance === null) args.push("--clear-acceptance");
+          if (params.priority !== undefined) args.push("--priority", String(params.priority));
+          if (Array.isArray(params.blockedBy)) {
+            if (params.blockedBy.length === 0) {
+              args.push("--clear-blocked-by");
+            } else {
+              for (const blocker of params.blockedBy) args.push("--blocked-by", blocker);
+            }
+          }
+          if (Array.isArray(params.labels)) {
+            if (params.labels.length === 0) {
+              args.push("--clear-labels");
+            } else {
+              for (const label of params.labels) args.push("--label", label);
+            }
+          }
+          const ticket = await client.json(args, call);
+          const summary = [
+            `Updated ${ticket.id} ${ticket.subject} [${ticket.status}]`,
+            `Priority: ${ticket.priority}; blocked by: ${ticket.blockedBy?.length ? ticket.blockedBy.join(", ") : "none"}`,
+            ticket.acceptance ? `Acceptance: ${shorten(ticket.acceptance, 300)}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n");
+          return success(summary, { action: "update", ticket });
+        }
         if (params.action === "show") {
           const ticket = await client.json(
             ["tickets", "show", params.ticketId, "--json"],
