@@ -1,12 +1,22 @@
 # Lyra OMP adapter
 
-Thin OMP surface for the standalone Lyra conductor:
+Typed OMP surface for the standalone Lyra conductor.
 
-- `/lyra <command>` — run `lyra` CLI commands from an OMP session.
-- `lyra_conduct` — model-callable status/start/monitor/stop/close tool.
+## Agent tools
 
-The adapter does not own the task graph; it shells out to the `lyra` binary. Install the core CLI
-first (`cd rust && cargo install --path .`), or set `LYRA_BIN` to an absolute command.
+The lead agent uses six domain tools; none accepts a raw CLI argument array:
+
+| Tool | Approval | Purpose |
+|---|---|---|
+| `lyra_status` | read | Project graph + latest/named run summary + next action |
+| `lyra_tickets` | read | List tickets or show one ticket's prompt/acceptance/result |
+| `lyra_tickets_create` | write | Create a validated batch of tickets with dependency keys |
+| `lyra_start` | write | Start a run and return a `runId` immediately |
+| `lyra_wait` | write | Bounded wait; returns `timedOut` without stopping the run |
+| `lyra_control` | write | Stop or close an explicit `runId` |
+
+The adapter shells out to the `lyra` binary and owns no state. Install the core CLI first
+(`cd rust && cargo install --path .`), or set `LYRA_BIN` to an absolute command.
 
 ```sh
 # from the Lyra repository root
@@ -15,6 +25,11 @@ cd .. && omp plugin link ./packages/omp
 # restart omp or /reload-plugins
 ```
 
-The adapter bundles a `lyra` skill and a `commands/lyra.md` prompt stub. The delivery skills
-(`lyra-plan`, `lyra-work`, `lyra-review`, `lyra-merge`, `lyra-close`, `lyra-ship`) remain the
-user-level skill suite; this package only exposes the conductor entry point.
+`/lyra <command>` is a human/debug escape hatch that runs the CLI directly. Agents should use the
+typed tools instead; workers use the separate `lyra-worker.mjs` extension and must not call this CLI.
+
+Run the adapter tests with:
+
+```sh
+cd packages/omp && npm test
+```

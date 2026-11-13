@@ -21,7 +21,7 @@ Implemented through **P3 + P5** (P4 RPC mode is optional/deferred):
 - blocker suspension/checkpoint/resume and `needs_input`
 - model policy: classes, roles, provider caps, usage-aware selection, per-worker role overlay
 - cross-agent launch (`omp`/`codex`/`claude`) with a `RESULT.md` fallback
-- OMP adapter package (`packages/omp`) — a thin `/lyra` + `lyra_conduct` wrapper around the binary
+- OMP adapter package (`packages/omp`) — six typed lead-agent tools plus the human `/lyra` command
 
 No board UI, no native terminal. Those are non-goals for the current product.
 

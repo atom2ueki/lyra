@@ -17,15 +17,15 @@
 
 ### 3.1 — CLI transport module (adapter)
 
-- [ ] Add `packages/omp/lib/lyra-cli.mjs`:
+- [x] Add `packages/omp/lib/lyra-cli.mjs`:
   - `runJson(args, { cwd, input, signal, timeoutMs })`: spawn `LYRA_BIN`/`lyra`, collect stdout/stderr, validate a JSON object, reject malformed output with a repair hint.
   - `runText(args, ...)` for the human `/lyra` command only.
   - `LyraCliError { code, message, next, stderr, exitCode }`.
   - Parse the Phase 1 error envelope when present; otherwise classify exit codes and include the last meaningful stderr line.
   - Abort handling: on `signal.aborted`, `SIGTERM`, then `SIGKILL` after a short grace period; always resolve/reject once.
   - A hard default timeout per call (e.g. 30s for start/wait, 10s for reads); caller may override but not exceed a cap.
-- [ ] Resolve the binary once per session: `LYRA_BIN`, then `lyra` on PATH. On `ENOENT`, return an actionable error (“install with ... or set LYRA_BIN”).
-- [ ] Check `lyra --version` lazily on first call; surface a clear “upgrade lyra” error if `--concise` is unavailable.
+- [x] Resolve the binary once per session: `LYRA_BIN`, then `lyra` on PATH. On `ENOENT`, return an actionable error (“install with ... or set LYRA_BIN”).
+- [x] Check `lyra --version` lazily on first call; surface a clear “upgrade lyra” error if `--concise` is unavailable.
 
 ### 3.2 — Six tools (adapter)
 
@@ -40,50 +40,50 @@ Register these through `pi.registerTool` in `packages/omp/extension/lyra.mjs` (o
 | `lyra_wait` | `write` | `cwd?`, `runId?`, `afterRevision?`, `timeoutMs?` | `lyra conduct wait --json --concise` |
 | `lyra_control` | `write` | `cwd?`, `runId?`, `action: stop\|close` | `lyra conduct stop/close --json --concise` |
 
-- [ ] Tool names are `lyra_`-prefixed and unique; no generic `args` array.
-- [ ] Each tool description states when to call it, what it returns, and the approval/ownership boundary. Do not duplicate the full CLI help in every description.
-- [ ] `lyra_tickets_create` schema mirrors Phase 1 batch input (`key`, `subject`, `prompt`, `blockedBy`, optional fields); reject duplicate keys client-side with an actionable error.
-- [ ] `lyra_start` never blocks; it returns `runId`, started tickets, and `next`.
-- [ ] `lyra_wait` is bounded by the CLI and returns `timed_out`; it never calls destructive `monitor --timeout`.
-- [ ] `lyra_control` requires an explicit `action` and `runId` when more than one run exists.
-- [ ] Remove the old `lyra_conduct` registration. Keep `/lyra` for humans; document that it is not the agent path.
+- [x] Tool names are `lyra_`-prefixed and unique; no generic `args` array.
+- [x] Each tool description states when to call it, what it returns, and the approval/ownership boundary. Do not duplicate the full CLI help in every description.
+- [x] `lyra_tickets_create` schema mirrors Phase 1 batch input (`key`, `subject`, `prompt`, `blockedBy`, optional fields); reject duplicate keys client-side with an actionable error.
+- [x] `lyra_start` never blocks; it returns `runId`, started tickets, and `next`.
+- [x] `lyra_wait` is bounded by the CLI and returns `timed_out`; it never calls destructive `monitor --timeout`.
+- [x] `lyra_control` requires an explicit `action` and `runId` when more than one run exists.
+- [x] Remove the old `lyra_conduct` registration. Keep `/lyra` for humans; document that it is not the agent path.
 
 ### 3.3 — Result and error contract (adapter)
 
-- [ ] Return `content` as a short Markdown summary (≤ ~12 lines): run id/status, changed tickets, blockers/needs-input, and `next`.
-- [ ] Return deterministic `details`:
+- [x] Return `content` as a short Markdown summary (≤ ~12 lines): run id/status, changed tickets, blockers/needs-input, and `next`.
+- [x] Return deterministic `details`:
   ```ts
   { ok: true, action, projectId?, runId?, revision?, status?, tickets?, next?, timedOut? }
   ```
   Preserve the CLI's `schemaVersion`; do not dump the full raw state.
-- [ ] On failure return `isError: true`, a concise message, and details with `code`, `next`, `exitCode`, `stderrTail`.
-- [ ] `needs_input` results include the exact human question and the affected ticket id; do not synthesize an answer.
-- [ ] Use `onUpdate` for wait iterations (“waiting for run ..., revision ...”) and start acknowledgment.
-- [ ] Never expose model catalog/policy/usage unless a caller explicitly requests full debug output (not part of the six tools).
+- [x] On failure return `isError: true`, a concise message, and details with `code`, `next`, `exitCode`, `stderrTail`.
+- [x] `needs_input` results include the exact human question and the affected ticket id; do not synthesize an answer.
+- [x] Use `onUpdate` for wait iterations (“waiting for run ..., revision ...”) and start acknowledgment.
+- [x] Never expose model catalog/policy/usage unless a caller explicitly requests full debug output (not part of the six tools).
 
 ### 3.4 — Tests (adapter)
 
-- [ ] Add `packages/omp/test/agent-tools.test.mjs` using `node:test`.
-- [ ] Create a mock `lyra` executable in a temp dir that:
+- [x] Add `packages/omp/test/agent-tools.test.mjs` using `node:test`.
+- [x] Create a mock `lyra` executable in a temp dir that:
   - responds to `--version`
   - emits concise JSON for status/start/wait/control
   - records argv/stdin to a file
   - sleeps for a wait-cancel test
-- [ ] Assert:
+- [x] Assert:
   - no tool accepts `args`
   - read tools set `approval: "read"`; write tools set `"write"`
   - `lyra_tickets_create` sends JSON on stdin and maps the response
   - `lyra_wait` returns `timed_out` without marking a run stopped
   - aborting `lyra_wait` terminates the mock child
   - malformed JSON/CLI errors become actionable `isError` results
-- [ ] Add `scripts.test` to `packages/omp/package.json` and run `node --test`.
+- [x] Add `scripts.test` to `packages/omp/package.json` and run `node --test`.
 
 ### 3.5 — Boundary guardrails (adapter)
 
-- [ ] Worker extension remains unchanged in this phase; lead tools are not available in worker sessions (the worker config/extension path is separate).
-- [ ] No tool reads or writes `.lyra` files directly; all state actions go through the CLI.
-- [ ] Reject `cwd` paths outside the session's approved root only when the CLI/harness policy requires it; otherwise pass through and let the CLI resolve the project.
-- [ ] Document that `/lyra` is a human escape hatch and must not be used by the model when a typed tool exists.
+- [x] Worker extension remains unchanged in this phase; lead tools are not available in worker sessions (the worker config/extension path is separate).
+- [x] No tool reads or writes `.lyra` files directly; all state actions go through the CLI.
+- [x] Reject `cwd` paths outside the session's approved root only when the CLI/harness policy requires it; otherwise pass through and let the CLI resolve the project.
+- [x] Document that `/lyra` is a human escape hatch and must not be used by the model when a typed tool exists.
 
 ## Acceptance
 

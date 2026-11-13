@@ -24,7 +24,8 @@ the ticket store, worktrees, workers, and state.
 /lyra upgrade                # self-update from the latest release
 ```
 
-The model-callable tool is `lyra_conduct` with the same command names.
+The model-callable tools are `lyra_status`, `lyra_tickets`, `lyra_tickets_create`, `lyra_start`, `lyra_wait`, and `lyra_control`.
+`/lyra` is a human/debug escape hatch; do not use it for agent work.
 
 ## Rules
 

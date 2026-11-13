@@ -1,9 +1,12 @@
 {
   "name": "@atom2ueki/lyra-omp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "OMP adapter for Lyra — /lyra command and lyra_conduct tool",
+  "description": "OMP adapter for Lyra — typed lead-agent tools, /lyra command, and worker skill",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "omp": {
     "extensions": [
       "./extension/lyra.mjs"
@@ -11,6 +14,7 @@
   },
   "files": [
     "extension",
+    "lib",
     "commands",
     "skills",
     "README.md"
