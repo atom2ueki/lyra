@@ -9,7 +9,7 @@ with a fake OMP worker and a scripted tool policy; the live OMP decision test is
 bash evals/agent-native-lyra/run.sh
 ```
 
-The runner builds `rust/target/debug/lyra` when missing and writes `report.json` next to this file.
+The runner builds `rust/target/release/lyra` when missing and writes `report.json` next to this file.
 Set `LYRA_BIN=/absolute/lyra` to test an installed binary instead.
 
 Scenarios:
