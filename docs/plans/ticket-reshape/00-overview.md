@@ -2,6 +2,12 @@
 
 **Status:** PROPOSED 2026-11-14. Implementation has not started.
 
+> **Pilot scope:** the first self-hosted run uses one vertical-slice ticket,
+> `TicketReshape`, because Lyra does not yet have an integration/merge step for
+> dependent worker branches. The four-ticket split below is the follow-up once a
+> single worker branch has landed cleanly. Do not start the four-ticket graph on
+> the first run.
+
 ## Problem
 
 Lyra can create tickets but cannot change them. The lead-agent surface has
