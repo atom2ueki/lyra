@@ -7,7 +7,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_BYTES = 1_000_000;
 const KILL_GRACE_MS = 500;
-const MIN_VERSION = [0, 1, 1];
+const MIN_VERSION = [0, 2, 0];
 
 export class LyraCliError extends Error {
   constructor(code, message, options = {}) {

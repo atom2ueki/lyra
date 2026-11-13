@@ -56,7 +56,7 @@ async function mockCli() {
 set -eu
 printf '%s\\n' "$*" >> "$MOCK_LOG"
 if [ "$1" = "--version" ]; then
-  if [ "\${MOCK_VERSION:-0.1.1}" = "0.1.0" ]; then printf 'lyra 0.1.0\\n'; else printf 'lyra 0.1.1\\n'; fi
+  if [ "\${MOCK_VERSION:-0.2.0}" = "0.1.0" ]; then printf 'lyra 0.1.0\\n'; else printf 'lyra 0.2.0\\n'; fi
   exit 0
 fi
 if [ "\${MOCK_MODE:-ok}" = "malformed" ]; then printf 'not-json\\n'; exit 0; fi
@@ -105,7 +105,7 @@ esac
   return { dir, bin, log, stdin };
 }
 
-async function setup({ version = "0.1.1" } = {}) {
+async function setup({ version = "0.2.0" } = {}) {
   const mock = await mockCli();
   process.env.LYRA_BIN = mock.bin;
   process.env.MOCK_LOG = mock.log;

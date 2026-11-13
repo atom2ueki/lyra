@@ -36,7 +36,7 @@ lyra upgrade
 ```
 
 The installer uses `~/.local/bin` by default and verifies the release `SHA256SUMS` before replacing
-the binary. Override with `LYRA_INSTALL_DIR`, pin a tag with `LYRA_VERSION=0.1.1`, or use
+the binary. Override with `LYRA_INSTALL_DIR`, pin a tag with `LYRA_VERSION=0.2.0`, or use
 `LYRA_GITHUB_TOKEN` for a private fork (`gh` is required for authenticated asset downloads).
 
 From source:
