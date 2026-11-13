@@ -1,5 +1,12 @@
 # Lyra
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/concepts/nocturne-logo.png">
+    <img src="assets/brand/concepts/paper-sky-logo.png" alt="Lyra — celestial lyre logo" width="460">
+  </picture>
+</p>
+
 Repository: <https://github.com/atom2ueki/lyra>
 
 Lyra is a supervised task conductor for coding agents. It keeps the task graph in a local store,
@@ -9,7 +16,7 @@ The core scheduler, store, pane adapters, worktree handling, and model routing a
 (`rust/`). The only JavaScript is the OMP worker extension (`rust/src/lyra-worker.mjs`), which is
 embedded into the Rust binary and loaded into each OMP worker with `-e`.
 
-Implemented through **P3 + P5** (P4 RPC mode is optional/deferred):
+Implemented:
 
 - Lyra ticket schema v1 + local store + DAG validation
 - `omp-kanban` import adapter
