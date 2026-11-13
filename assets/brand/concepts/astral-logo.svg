@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Lyra astral lyre logo">
+<defs>
+  <radialGradient id="sky" cx="50%" cy="38%" r="72%">
+    <stop offset="0%" stop-color="#172841"/>
+    <stop offset="55%" stop-color="#0D1626"/>
+    <stop offset="100%" stop-color="#070C16"/>
+  </radialGradient>
+  <radialGradient id="vega" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="#FFF8DE" stop-opacity=".95"/>
+    <stop offset="24%" stop-color="#D7B56D" stop-opacity=".45"/>
+    <stop offset="100%" stop-color="#D7B56D" stop-opacity="0"/>
+  </radialGradient>
+  <pattern id="stars" width="46" height="46" patternUnits="userSpaceOnUse">
+    <circle cx="4" cy="7" r="1" fill="#F2EADB" opacity=".20"/>
+    <circle cx="29" cy="18" r=".8" fill="#8CB8FF" opacity=".22"/>
+    <circle cx="17" cy="39" r=".7" fill="#D7B56D" opacity=".22"/>
+  </pattern>
+</defs>
+<rect width="1024" height="1024" fill="url(#sky)"/>
+<rect x="34" y="34" width="956" height="956" fill="url(#stars)" opacity=".75"/>
+<circle cx="512" cy="406" r="332" fill="none" stroke="#D7B56D" stroke-width="1" opacity=".25"/>
+<circle cx="512" cy="406" r="302" fill="none" stroke="#8CB8FF" stroke-width="1" stroke-dasharray="1 10" opacity=".30"/>
+<circle cx="512" cy="406" r="274" fill="none" stroke="#D7B56D" stroke-width=".8" opacity=".15"/>
+<path d="M834.0 406.0 L844.0 406.0" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M836.2 448.7 L841.2 449.3" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M827.9 490.6 L832.7 491.9" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M814.1 531.1 L818.7 533.1" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M790.9 567.0 L799.5 572.0" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M771.4 605.1 L775.4 608.1" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M743.2 637.2 L746.8 640.8" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M711.1 665.4 L714.1 669.4" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M673.0 684.9 L678.0 693.5" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M637.1 708.1 L639.1 712.7" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M596.6 721.9 L597.9 726.7" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M554.7 730.2 L555.3 735.2" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M512.0 728.0 L512.0 738.0" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M469.3 730.2 L468.7 735.2" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M427.4 721.9 L426.1 726.7" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M386.9 708.1 L384.9 712.7" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M351.0 684.9 L346.0 693.5" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M312.9 665.4 L309.9 669.4" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M280.8 637.2 L277.2 640.8" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M252.6 605.1 L248.6 608.1" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M233.1 567.0 L224.5 572.0" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M209.9 531.1 L205.3 533.1" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M196.1 490.6 L191.3 491.9" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M187.8 448.7 L182.8 449.3" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M190.0 406.0 L180.0 406.0" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M187.8 363.3 L182.8 362.7" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M196.1 321.4 L191.3 320.1" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M209.9 280.9 L205.3 278.9" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M233.1 245.0 L224.5 240.0" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M252.6 206.9 L248.6 203.9" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M280.8 174.8 L277.2 171.2" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M312.9 146.6 L309.9 142.6" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M351.0 127.1 L346.0 118.5" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M386.9 103.9 L384.9 99.3" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M427.4 90.1 L426.1 85.3" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M469.3 81.8 L468.7 76.8" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M512.0 84.0 L512.0 74.0" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M554.7 81.8 L555.3 76.8" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M596.6 90.1 L597.9 85.3" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M637.1 103.9 L639.1 99.3" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M673.0 127.1 L678.0 118.5" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M711.1 146.6 L714.1 142.6" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M743.2 174.8 L746.8 171.2" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M771.4 206.9 L775.4 203.9" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M790.9 245.0 L799.5 240.0" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M814.1 280.9 L818.7 278.9" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M827.9 321.4 L832.7 320.1" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<path d="M836.2 363.3 L841.2 362.7" stroke="#D7B56D" stroke-width="1" opacity=".28"/>
+<circle cx="242" cy="260" r="2.2" fill="#D7B56D" opacity=".7"/>
+<path d="M242 260 L286 282" stroke="#D7B56D" stroke-width=".9" opacity=".42"/>
+<circle cx="286" cy="282" r="2.2" fill="#D7B56D" opacity=".7"/>
+<path d="M286 282 L270 330" stroke="#D7B56D" stroke-width=".9" opacity=".42"/>
+<circle cx="270" cy="330" r="2.2" fill="#D7B56D" opacity=".7"/>
+<path d="M270 330 L318 352" stroke="#D7B56D" stroke-width=".9" opacity=".42"/>
+<circle cx="318" cy="352" r="2.2" fill="#D7B56D" opacity=".7"/>
+<path d="M318 352 L340 306" stroke="#D7B56D" stroke-width=".9" opacity=".42"/>
+<circle cx="340" cy="306" r="2.2" fill="#D7B56D" opacity=".7"/>
+<text x="216" y="246" fill="#D7B56D" font-family="ui-monospace, Menlo, monospace" font-size="9" letter-spacing="3" opacity=".55">LYRA</text>
+<path d="M408 318 L510 596" stroke="#8CB8FF" stroke-width="1" stroke-dasharray="2 12" opacity=".23"/>
+<path d="M476 318 L578 580" stroke="#8CB8FF" stroke-width="1" stroke-dasharray="2 12" opacity=".23"/>
+<path d="M544 318 L442 580" stroke="#8CB8FF" stroke-width="1" stroke-dasharray="2 12" opacity=".23"/>
+<path d="M612 318 L510 596" stroke="#8CB8FF" stroke-width="1" stroke-dasharray="2 12" opacity=".23"/>
+<path d="M442 318 L544 590" stroke="#8CB8FF" stroke-width="1" stroke-dasharray="2 12" opacity=".23"/>
+<path d="M578 318 L476 590" stroke="#8CB8FF" stroke-width="1" stroke-dasharray="2 12" opacity=".23"/>
+<path d="M372 274 C306 314 306 516 398 570 Q512 616 626 570 C718 516 718 314 652 274" fill="none" stroke="#F2EADB" stroke-width="2.6" stroke-linecap="round"/>
+<path d="M386 318 H638" fill="none" stroke="#F2EADB" stroke-width="2.6" stroke-linecap="round"/>
+<path d="M408 322 L408 568" stroke="#8CB8FF" stroke-width="1.8" stroke-linecap="round" opacity=".92"/>
+<circle cx="408" cy="318" r="3.6" fill="#D7B56D"/>
+<circle cx="408" cy="568" r="2.2" fill="#F2EADB" opacity=".8"/>
+<path d="M442 322 L442 580" stroke="#8CB8FF" stroke-width="1.8" stroke-linecap="round" opacity=".92"/>
+<circle cx="442" cy="318" r="3.6" fill="#D7B56D"/>
+<circle cx="442" cy="580" r="2.2" fill="#F2EADB" opacity=".8"/>
+<path d="M476 322 L476 590" stroke="#8CB8FF" stroke-width="1.8" stroke-linecap="round" opacity=".92"/>
+<circle cx="476" cy="318" r="3.6" fill="#D7B56D"/>
+<circle cx="476" cy="590" r="2.2" fill="#F2EADB" opacity=".8"/>
+<path d="M510 322 L510 596" stroke="#8CB8FF" stroke-width="1.8" stroke-linecap="round" opacity=".92"/>
+<circle cx="510" cy="318" r="3.6" fill="#D7B56D"/>
+<circle cx="510" cy="602" r="8" fill="none" stroke="#D7B56D" stroke-width="2"/>
+<circle cx="510" cy="602" r="2.2" fill="#D7B56D"/>
+<path d="M544 322 L544 590" stroke="#8CB8FF" stroke-width="1.8" stroke-linecap="round" opacity=".92"/>
+<circle cx="544" cy="318" r="3.6" fill="#D7B56D"/>
+<circle cx="544" cy="590" r="2.2" fill="#F2EADB" opacity=".8"/>
+<path d="M578 322 L578 580" stroke="#8CB8FF" stroke-width="1.8" stroke-linecap="round" opacity=".92"/>
+<circle cx="578" cy="318" r="3.6" fill="#D7B56D"/>
+<circle cx="578" cy="580" r="2.2" fill="#F2EADB" opacity=".8"/>
+<path d="M612 322 L612 568" stroke="#8CB8FF" stroke-width="1.8" stroke-linecap="round" opacity=".92"/>
+<circle cx="612" cy="318" r="3.6" fill="#D7B56D"/>
+<circle cx="612" cy="568" r="2.2" fill="#F2EADB" opacity=".8"/>
+<circle cx="510" cy="224" r="70" fill="url(#vega)" opacity=".75"/>
+<polygon points="528.0,224.0 514.6,225.9 522.7,236.7 511.9,228.6 510.0,242.0 508.1,228.6 497.3,236.7 505.4,225.9 492.0,224.0 505.4,222.1 497.3,211.3 508.1,219.4 510.0,206.0 511.9,219.4 522.7,211.3 514.6,222.1" fill="#FFF3C4"/>
+<path d="M510 258 L510 318" stroke="#D7B56D" stroke-width="1" stroke-dasharray="2 6" opacity=".85"/>
+<path d="M510 224 L560 224" stroke="#D7B56D" stroke-width="1" opacity=".7"/>
+<text x="568" y="228" fill="#D7B56D" font-family="ui-monospace, Menlo, monospace" font-size="10" letter-spacing="4" opacity=".9">VEGA</text>
+<circle cx="260" cy="380" r="1.8" fill="#D7B56D" opacity="0.55"/>
+<circle cx="758" cy="360" r="2.2" fill="#8CB8FF" opacity="0.5"/>
+<circle cx="736" cy="540" r="1.6" fill="#D7B56D" opacity="0.5"/>
+<circle cx="284" cy="548" r="1.4" fill="#8CB8FF" opacity="0.55"/>
+<circle cx="512" cy="654" r="1.5" fill="#D7B56D" opacity="0.45"/>
+<text x="512" y="836" text-anchor="middle" fill="#F2EADB" font-family="Georgia, 'Iowan Old Style', 'Times New Roman', serif" font-size="118" letter-spacing="15">LYRA</text>
+<path d="M354 870 H670" stroke="#D7B56D" stroke-width="1" opacity=".55"/>
+<text x="512" y="900" text-anchor="middle" fill="#D7B56D" font-family="ui-monospace, Menlo, monospace" font-size="11" letter-spacing="7">TASK CONDUCTOR</text>
+<text x="512" y="936" text-anchor="middle" fill="#F2EADB" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="19" opacity=".72">tasks in orbit</text>
+<circle cx="512" cy="966" r="2" fill="#D96C4A"/>
+</svg>
