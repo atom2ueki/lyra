@@ -23,6 +23,7 @@ const chain = () => {
     positive: () => schema,
     min: () => schema,
     max: () => schema,
+    nullable: () => schema,
   };
   return schema;
 };
@@ -306,6 +307,56 @@ async function scenarioInvalid() {
   }
 }
 
+async function scenarioUpdate() {
+  const s = await fixture("done");
+  const calls = [];
+  try {
+    const pi = makePi();
+    const created = await callTool(pi, "lyra_tickets_create", {
+      tickets: [
+        { key: "one", subject: "One", prompt: "One", blockedBy: [] },
+        { key: "two", subject: "Two", prompt: "Two", blockedBy: [] },
+      ],
+    }, { cwd: s.repo, calls });
+    assert(!created.isError, "update fixture tickets");
+    const one = created.details.created[0].id;
+    const two = created.details.created[1].id;
+
+    const updated = await callTool(pi, "lyra_tickets", {
+      action: "update",
+      ticketId: one,
+      prompt: "One revised",
+      priority: 4,
+      blockedBy: [two],
+      labels: ["backend"],
+    }, { cwd: s.repo, calls });
+    assert(!updated.isError, "ticket update");
+    assert(updated.details.ticket.prompt === "One revised", "update rewrote prompt");
+    assert(updated.details.ticket.blockedBy[0] === two, "update replaced blockers");
+    assert(updated.details.ticket.labels[0] === "backend", "update replaced labels");
+
+    const status = await callTool(pi, "lyra_status", {}, { cwd: s.repo, calls });
+    const blockedIds = status.details.graph.blocked.map((ticket) => ticket.id);
+    assert(blockedIds.includes(one), `update made ${one} blocked`);
+    assert(!status.details.graph.ready.some((ticket) => ticket.id === one), "updated ticket is not ready");
+
+    const shown = await callTool(pi, "lyra_tickets", { action: "show", ticketId: one }, { cwd: s.repo, calls });
+    const updatedAt = shown.details.ticket.updatedAt;
+    const rejected = await callTool(pi, "lyra_tickets", {
+      action: "update",
+      ticketId: one,
+      blockedBy: [one],
+    }, { cwd: s.repo, calls });
+    assert(rejected.isError && rejected.details.code === "invalid_input", "self blocker rejected");
+    const after = await callTool(pi, "lyra_tickets", { action: "show", ticketId: one }, { cwd: s.repo, calls });
+    assert(after.details.ticket.updatedAt === updatedAt, "rejected update wrote nothing");
+    assert(after.details.ticket.prompt === "One revised", "rejected update changed no field");
+    return { name: "F-update", status: "pass", calls: calls.length, ...resultCounts(calls) };
+  } finally {
+    await rm(s.repo, { recursive: true, force: true });
+  }
+}
+
 function resultCounts(calls) {
   return {
     toolCalls: calls.length,
@@ -323,7 +374,7 @@ async function main() {
   const bin = process.env.LYRA_BIN || join(ROOT, "rust/target/debug/lyra");
   process.env.LYRA_BIN = bin;
   const report = { schemaVersion: 1, startedAt: new Date().toISOString(), scenarios: [] };
-  const scenarios = [scenarioDag, scenarioBlocker, scenarioNeedsInput, scenarioCancel, scenarioInvalid];
+  const scenarios = [scenarioDag, scenarioBlocker, scenarioNeedsInput, scenarioCancel, scenarioInvalid, scenarioUpdate];
   for (const scenario of scenarios) {
     const started = Date.now();
     try {

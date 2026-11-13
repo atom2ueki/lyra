@@ -24,9 +24,11 @@ use crate::pane::{
     select_backend,
 };
 use crate::project::{current_project, project_id_for, store_dir_for};
-use crate::schema::{Ticket, TicketStatus, ready_tickets, ticket_map, validate_graph};
+use crate::schema::{
+    PRIORITY_MAX, PRIORITY_MIN, Ticket, TicketStatus, ready_tickets, ticket_map, validate_graph,
+};
 use crate::store::{NewTicket, create_ticket, ensure_store, list_tickets, read_ticket};
-use crate::tickets::{BatchInput, create_batch};
+use crate::tickets::{BatchInput, TicketUpdate, create_batch, update_ticket};
 use crate::worker::ensure_worker_extension;
 
 #[derive(Parser)]
@@ -378,6 +380,31 @@ enum TicketsCommand {
         store: Option<PathBuf>,
         #[arg(long = "project-id")]
         project_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Update {
+        id: String,
+        #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(long)]
+        prompt: Option<String>,
+        #[arg(long, conflicts_with = "clear_acceptance")]
+        acceptance: Option<String>,
+        #[arg(long = "clear-acceptance")]
+        clear_acceptance: bool,
+        #[arg(long, value_parser = clap::value_parser!(i32).range(PRIORITY_MIN as i64..=PRIORITY_MAX as i64))]
+        priority: Option<i32>,
+        #[arg(long = "blocked-by")]
+        blocked_by: Vec<String>,
+        #[arg(long = "clear-blocked-by", conflicts_with = "blocked_by")]
+        clear_blocked_by: bool,
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        #[arg(long = "clear-labels", conflicts_with = "labels")]
+        clear_labels: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1069,6 +1096,39 @@ Plan:
                     for item in &output.created {
                         println!("{}  {}", item.id, item.key);
                     }
+                }
+            }
+            TicketsCommand::Update {
+                id,
+                store,
+                subject,
+                prompt,
+                acceptance,
+                clear_acceptance,
+                priority,
+                blocked_by,
+                clear_blocked_by,
+                labels,
+                clear_labels,
+                json,
+            } => {
+                let context = resolve_store(store, None)?;
+                let update = TicketUpdate {
+                    subject,
+                    prompt,
+                    acceptance,
+                    clear_acceptance,
+                    priority,
+                    blocked_by,
+                    clear_blocked_by,
+                    labels,
+                    clear_labels,
+                };
+                let ticket = update_ticket(&context.store, &id, update)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&ticket)?);
+                } else {
+                    println!("Updated {}  {}", ticket.id, ticket.subject);
                 }
             }
         },

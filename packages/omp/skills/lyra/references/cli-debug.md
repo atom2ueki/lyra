@@ -9,6 +9,9 @@ lyra status --json --concise       # graph + latest run + next action
 lyra tickets list --json           # ticket summaries
 lyra tickets show QuietHarbor --json     # prompt, acceptance, blockers, result
 lyra tickets create --file - --json # batch DAG from stdin
+lyra tickets update QuietHarbor --json [--subject T] [--prompt T] [--priority 0..4] \
+                 [--acceptance T | --clear-acceptance] [--blocked-by ID]... \
+                 [--clear-blocked-by] [--label T]... [--clear-labels]
 lyra conduct start --json --concise [--ticket ID]... [--tickets ID,ID]
 lyra conduct wait --run RUN --json --concise [--after-revision N] [--timeout-ms 30000]
 lyra conduct run --run RUN --json --concise
@@ -27,6 +30,8 @@ lyra upgrade [--check] [--force] [--version TAG]
   active.
 - `monitor --timeout-ms` is an interactive lifecycle action; it may mark the run stopped.
 - `close` removes clean run-scoped worktrees and leaves suspended worktrees in place.
+- `tickets update` only edits `todo`/`failed` tickets, re-validates the whole graph, and writes
+  nothing when rejected; `--blocked-by` and `--label` replace the entire list.
 - `--ticket` may be repeated; `--tickets` is comma-separated.
 - JSON errors use the `{ok:false,error:{code,message,next}}` envelope.
 
