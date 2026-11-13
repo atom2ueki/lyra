@@ -66,5 +66,5 @@
 - `cd rust && cargo test wait_revision` passes.
 - `cd rust && cargo test --test conductor` passes with the existing DAG/suspension tests.
 - `lyra conduct wait --run <id> --timeout-ms 100 --json` on an active fake-worker run returns `timed_out:true` and `lyra report --run <id>` still reports `running`.
-- `lyra conduct start --ticket T-002 --ticket T-004 --dry-run --json` reports the selected ready tickets; a not-ready id fails with a structured error naming its blockers.
+- `lyra conduct start --ticket QuietHarbor --ticket SwiftFalcon --dry-run --json` reports the selected ready tickets; a not-ready id fails with a structured error naming its blockers.
 - The OMP adapter abort test (implemented in phase 3) proves the child process exits on signal.

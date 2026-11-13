@@ -57,7 +57,7 @@
   - `key` is required and unique within the batch; `subject` and `prompt` are required; `blockedBy` references keys in the same batch or existing ticket ids.
   - Validate all keys/references and cycles before writing anything.
   - Create all tickets with generated ids, then rewrite `blocked_by` with the mapped ids in a second pass; never write a ticket with an unresolved temporary key.
-  - Output `{ "created": [{"key":"core","id":"T-001"}, ...] }`.
+  - Output `{ "created": [{"key":"core","id":"QuietHarbor"}, ...] }`.
 - [x] Keep `lyra add` for humans; implement it by delegating to the same single-ticket creation path so both produce identical defaults.
 - [x] Add `#[serde(deny_unknown_fields)]` to the batch input types and reject duplicate keys with an actionable error.
 - [x] Ensure batch creation is atomic at the logical level: validation errors create zero tickets; a later I/O failure reports exactly which tickets were written.
