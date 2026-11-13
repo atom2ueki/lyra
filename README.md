@@ -2,8 +2,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/concepts/nocturne-logo.png">
-    <img src="assets/brand/concepts/paper-sky-logo.png" alt="Lyra — celestial lyre logo" width="460">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banners/lyra-banner-nocturne.png">
+    <img src="assets/brand/banners/lyra-banner-paper-sky.png" alt="Lyra — supervised task conductor" width="100%">
   </picture>
 </p>
 
