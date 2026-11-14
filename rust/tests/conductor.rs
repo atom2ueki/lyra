@@ -20,7 +20,9 @@ use lyra::conductor::{
 use lyra::config::{ApprovalPosture, LyraConfig, MergeMode};
 use lyra::pane::headless::HeadlessBackend;
 use lyra::schema::TicketStatus;
-use lyra::store::{NewTicket, create_ticket, ensure_store, list_tickets};
+use lyra::store::{
+    NewTicket, claim_ticket, create_ticket, ensure_store, list_tickets, suspend_ticket,
+};
 
 fn git(repo: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -985,4 +987,101 @@ fn launch_failures_are_capped_and_the_ticket_fails() {
     );
     assert!(!Path::new(&run_ticket.worktree).exists());
     let _ = started;
+}
+
+#[test]
+fn capped_resume_failures_keep_the_checkpoint_and_ask_for_input() {
+    let _guard = lock_env();
+    let dir = repo();
+    let store = dir.path().join(".lyra/store");
+    ensure_store(&store).unwrap();
+    let ticket = create_ticket(
+        &store,
+        NewTicket {
+            project_id: "test-project".to_string(),
+            subject: "Implement feature".to_string(),
+            prompt: "Implement the feature.".to_string(),
+            blocked_by: Vec::new(),
+            priority: 2,
+            labels: Vec::new(),
+            model_class: None,
+            acceptance: None,
+            plan: None,
+            parent: None,
+            origin: Some("test".to_string()),
+            harness: Some("omp".to_string()),
+        },
+    )
+    .unwrap();
+    let gone_worktree = dir.path().join("gone-worktree");
+    claim_ticket(&store, &ticket.id, "run-old", "claim-old")
+        .unwrap()
+        .unwrap();
+    suspend_ticket(
+        &store,
+        &ticket.id,
+        "run-old",
+        "claim-old",
+        lyra::store::SuspendArgs {
+            blockers: Vec::new(),
+            reason: "checkpoint".to_string(),
+            needs_input: false,
+            base_head: "deadbeef".to_string(),
+            worktree: gone_worktree.display().to_string(),
+            branch: "lyra/run-old/Ticket".to_string(),
+        },
+    )
+    .unwrap()
+    .unwrap();
+    unsafe { std::env::set_var("LYRA_OMP_BIN", fake_omp(dir.path())) };
+    start_run(StartOptions {
+        repo: dir.path().to_path_buf(),
+        store: store.clone(),
+        project_id: "test-project".to_string(),
+        config: LyraConfig {
+            max_parallel: 1,
+            max_per_provider: HashMap::new(),
+            approval_posture: ApprovalPosture::Ask,
+            merge: MergeMode::Auto,
+        },
+        backend: Some(Box::new(HeadlessBackend::new())),
+        max_parallel: None,
+        max_seconds: Some(10),
+        ticket_ids: Vec::new(),
+        base_ref: None,
+        dry_run: false,
+        run_id: Some("run-resume-cap".to_string()),
+        model_policy: None,
+        models: Some(Vec::new()),
+        usage: Some(Vec::new()),
+    })
+    .unwrap();
+    let state = monitor_run(MonitorOptions {
+        run_dir: run_dir_for(dir.path(), "run-resume-cap"),
+        backend: Some(Box::new(HeadlessBackend::new())),
+        once: false,
+        interval_ms: 10,
+        timeout_ms: Some(10000),
+        max_parallel: None,
+    })
+    .unwrap();
+    assert_eq!(
+        state.status,
+        RunStatus::Blocked,
+        "needs_input settles the run as blocked for the lead, matching worker needs_input"
+    );
+    let tickets = list_tickets(&store).unwrap();
+    let suspension = tickets[0]
+        .suspension
+        .as_ref()
+        .expect("checkpoint preserved");
+    assert!(
+        suspension.needs_input,
+        "capped resume must surface as input"
+    );
+    assert!(suspension.reason.contains("launch failed 3 times"));
+    assert_eq!(suspension.worktree, gone_worktree.display().to_string());
+    assert_eq!(suspension.branch, "lyra/run-old/Ticket");
+    assert_eq!(suspension.base_head, "deadbeef");
+    assert_eq!(tickets[0].status, TicketStatus::Todo);
 }

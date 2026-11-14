@@ -581,9 +581,36 @@ fn launch_ticket(
                 .map_or(0, |previous| previous.launch_failures);
             let launch_failures = previous_failures + 1;
             if launch_failures >= MAX_LAUNCH_FAILURES {
-                // Keep the claim so the ticket lands in the store as failed
-                // instead of cycling relaunches until maxSeconds.
-                let _ = finish_ticket(
+                let summary =
+                    format!("launch failed {launch_failures} times; last error: {error:#}");
+                if let Some(suspension) = &suspension {
+                    // A resume that keeps failing must keep its checkpoint:
+                    // finishing would clear the suspension and orphan the
+                    // worktree. Re-suspend with needs_input so the lead sees
+                    // the ticket instead of relaunching until maxSeconds. The
+                    // worktree local is None on a failed resume, so take the
+                    // checkpoint paths from the suspension itself.
+                    let args = SuspendArgs {
+                        blockers: Vec::new(),
+                        reason: summary,
+                        needs_input: true,
+                        worktree: suspension.worktree.clone(),
+                        branch: suspension.branch.clone(),
+                        base_head: suspension.base_head.clone(),
+                    };
+                    if let Err(suspend_error) = suspend_ticket(
+                        Path::new(&state.store),
+                        &ticket.id,
+                        &state.run_id,
+                        &claim_id,
+                        args,
+                    ) {
+                        eprintln!(
+                            "lyra: suspend failed launch {}: {suspend_error:#}",
+                            ticket.id
+                        );
+                    }
+                } else if let Err(finish_error) = finish_ticket(
                     Path::new(&state.store),
                     &ticket.id,
                     &state.run_id,
@@ -593,10 +620,10 @@ fn launch_ticket(
                         "status": "failed",
                         "summary": format!("launch failed {launch_failures} times"),
                     }),
-                    Some(format!(
-                        "launch failed {launch_failures} times; last error: {error:#}"
-                    )),
-                );
+                    Some(summary),
+                ) {
+                    eprintln!("lyra: finish failed launch {}: {finish_error:#}", ticket.id);
+                }
             } else {
                 let _ = release_ticket(
                     Path::new(&state.store),
