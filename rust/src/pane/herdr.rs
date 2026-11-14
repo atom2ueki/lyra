@@ -48,6 +48,12 @@ impl HerdrBackend {
         self.json(&["agent", "get", name]).is_ok()
     }
 
+    fn label_pane(&self, pane: &str, label: &str) {
+        // Cosmetic: keep worker panes identifiable in the herdr UI. A failed
+        // rename must never fail the launch.
+        let _ = self.run(&["pane", "rename", pane, label]);
+    }
+
     fn pane_from_value(value: &Value) -> Result<PaneHandle> {
         let pane = value
             .get("result")
@@ -163,13 +169,14 @@ impl PaneBackend for HerdrBackend {
             if format!("{error:#}").contains("agent_not_ready") && self.agent_exists(&name) {
                 // herdr's startup gate waits for an interactively ready agent;
                 // a worker that starts its task immediately is healthy, not failed.
+                self.label_pane(&pane.pane, &name);
                 return Ok(());
             }
             return Err(error);
         }
+        self.label_pane(&pane.pane, &name);
         Ok(())
     }
-
     fn send_text(&self, pane: &PaneHandle, text: &str, submit: bool) -> Result<()> {
         if submit && let Some(agent) = &pane.agent {
             self.run(&["agent", "prompt", agent, text])?;
@@ -316,6 +323,10 @@ case "$1 $2" in
     echo '{{"error":{{"code":"agent_not_found"}}}}'
     exit 1
     ;;
+  "pane rename")
+    printf '%s %s\n' "$3" "$4" >> "${{LYRA_HERDR_RENAME_LOG:?}}"
+    exit 0
+    ;;
 esac
 echo 'unexpected command' >&2
 exit 2
@@ -352,8 +363,16 @@ exit 2
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let bin = fake_herdr(dir.path(), true);
-        unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
+        let rename_log = dir.path().join("renames.log");
+        unsafe {
+            std::env::set_var("LYRA_HERDR_BIN", &bin);
+            std::env::set_var("LYRA_HERDR_RENAME_LOG", &rename_log);
+        }
         start(&HerdrBackend::new()).unwrap();
+        assert_eq!(
+            fs::read_to_string(&rename_log).unwrap(),
+            "w1:p2 lyra-worker\n"
+        );
     }
 
     #[test]
@@ -361,8 +380,13 @@ exit 2
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let bin = fake_herdr(dir.path(), false);
-        unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
+        let rename_log = dir.path().join("renames.log");
+        unsafe {
+            std::env::set_var("LYRA_HERDR_BIN", &bin);
+            std::env::set_var("LYRA_HERDR_RENAME_LOG", &rename_log);
+        }
         let error = start(&HerdrBackend::new()).unwrap_err();
         assert!(format!("{error:#}").contains("agent_not_ready"));
+        assert!(!rename_log.exists());
     }
 }
