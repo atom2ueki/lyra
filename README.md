@@ -18,8 +18,11 @@ Implemented:
 
 - Lyra ticket schema v1 + local store + DAG validation
 - `omp-kanban` import adapter
-- `lyra init` / `import` / `status` / `graph` / `models` / `doctor`
-- `PaneBackend`: herdr, Ghostty, headless
+- `lyra init` / `setup` / `import` / `status` / `graph` / `models` / `doctor`
+- `PaneBackend`: herdr, Ghostty, headless — chosen by `LYRA_PANE_BACKEND`, then the
+  `pane_backend` key in `config.toml` (written by `lyra setup`), then terminal detection.
+  New terminals are added as `PaneBackend` implementations; there is no runtime plugin
+  system by design.
 - worker extension (`lyra_progress`, `lyra_discover`, `lyra_finish`)
 - `lyra conduct start|monitor|resume|stop|report`, `lyra add`, `lyra logs`, `lyra close`
 - run-scoped worktrees, claims, state/events
@@ -75,7 +78,10 @@ lyra logs QuietHarbor
 lyra close
 ```
 
-`LYRA_HOME` overrides `~/.lyra`; `LYRA_PANE_BACKEND=herdr|ghostty|headless` overrides detection;
+`LYRA_HOME` overrides `~/.lyra`. Run `lyra setup` once per machine: it verifies omp/git,
+resolves the pane backend, and persists it as `pane_backend` in `~/.lyra/config.toml`
+(herdr and Ghostty give visible workers; headless runs them invisibly).
+`LYRA_PANE_BACKEND=herdr|ghostty|headless` overrides config for one invocation;
 `LYRA_OMP_BIN` overrides the `omp` binary for tests.
 
 New tickets use readable `AdjectiveNoun` ids such as `QuietHarbor`; legacy `T-001` ids from

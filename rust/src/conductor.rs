@@ -1030,6 +1030,7 @@ fn launch_ready(state: &mut RunState, backend: &dyn PaneBackend, max_parallel: u
         max_per_provider: state.max_per_provider.clone(),
         approval_posture: state.approval,
         merge: MergeMode::Auto,
+        pane_backend: None,
     };
     let ready: Vec<Ticket> = ready_tickets(&tickets)
         .into_iter()

@@ -12,7 +12,7 @@ use crate::conductor::{
     MonitorOptions, RunState, StartOptions, WaitOptions, WaitOutcome, close_run, latest_run_dir,
     load_state, monitor_run, run_dir_for, start_run, stop_run, wait_run,
 };
-use crate::config::{ensure_config, load_config, lyra_home};
+use crate::config::{ensure_config, load_config, lyra_home, set_pane_backend};
 use crate::graph::{to_dot, to_json, to_mermaid};
 use crate::import::import_omp_kanban;
 use crate::models::{
@@ -21,7 +21,7 @@ use crate::models::{
 };
 use crate::pane::{
     PaneBackend, ghostty::GhosttyBackend, headless::HeadlessBackend, herdr::HerdrBackend,
-    select_backend,
+    resolve_backend, select_backend,
 };
 use crate::project::{current_project, project_id_for, store_dir_for};
 use crate::schema::{
@@ -41,6 +41,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Init,
+    Setup,
     Import {
         kind: String,
         source: PathBuf,
@@ -603,8 +604,11 @@ fn run_doctor() -> Result<i32> {
         "config",
         load_config().map(|config| {
             format!(
-                "max_parallel={} approval={:?} merge={:?}",
-                config.max_parallel, config.approval_posture, config.merge
+                "max_parallel={} approval={:?} merge={:?} pane_backend={}",
+                config.max_parallel,
+                config.approval_posture,
+                config.merge,
+                config.pane_backend.as_deref().unwrap_or("<unset>")
             )
         }),
     );
@@ -622,13 +626,25 @@ fn run_doctor() -> Result<i32> {
         "worker extension",
         ensure_worker_extension().map(|path| path.display().to_string()),
     );
-    if std::env::var("HERDR_ENV").ok().as_deref() == Some("1") {
-        check("herdr", command_version("herdr", &["--version"]));
+    match resolve_backend() {
+        Ok(choice) => {
+            match choice.name.as_str() {
+                "herdr" => {
+                    check("herdr", command_version("herdr", &["--version"]));
+                }
+                "ghostty" => check(
+                    "ghostty",
+                    Ok("macOS Ghostty surface control via AppleScript".to_string()),
+                ),
+                _ => {}
+            }
+            check(
+                "pane backend",
+                Ok(format!("{} ({})", choice.name, choice.source)),
+            );
+        }
+        Err(error) => check("pane backend", Err(error)),
     }
-    check(
-        "pane backend",
-        select_backend().map(|backend| backend.name().to_string()),
-    );
     check(
         "tty",
         Ok(if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
@@ -656,6 +672,65 @@ fn run_doctor() -> Result<i32> {
     }
 }
 
+fn run_setup() -> Result<i32> {
+    let config_path = ensure_config()?;
+    let policy_path = ensure_model_policy()?;
+    let (root, project_id, store) = current_project()?;
+    ensure_store(&store)?;
+    let extension = ensure_worker_extension()?;
+
+    let omp_bin = std::env::var("LYRA_OMP_BIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "omp".to_string());
+    let omp = command_version(&omp_bin, &["--version"]).map_err(|error| {
+        anyhow::anyhow!("lyra needs the omp agent CLI on PATH (or LYRA_OMP_BIN): {error:#}")
+    })?;
+    let git = command_version("git", &["--version"])?;
+
+    let choice = resolve_backend()?;
+    let mut persisted = false;
+    if load_config()?.pane_backend.is_none() && std::env::var("LYRA_PANE_BACKEND").is_err() {
+        set_pane_backend(&choice.name)?;
+        persisted = true;
+    }
+
+    println!("Config:          {}", config_path.display());
+    println!("Model policy:    {}", policy_path.display());
+    println!("Worker extension: {}", extension.display());
+    println!("Project:         {project_id} ({})", root.display());
+    println!("Store:           {}", store.display());
+    println!("omp:             {omp}");
+    println!("git:             {git}");
+    println!(
+        "Pane backend:    {} ({}){}",
+        choice.name,
+        choice.source,
+        if persisted {
+            " — saved to config"
+        } else {
+            ""
+        }
+    );
+    if choice.name == "ghostty" {
+        println!(
+            "note: the ghostty backend drives Ghostty via AppleScript (macOS only) and needs the calling window focused for anchoring"
+        );
+    }
+    if choice.name == "headless" {
+        println!(
+            "note: the headless backend runs workers without visible panes; run setup inside herdr or Ghostty for visible workers"
+        );
+    }
+    let gh = command_version("gh", &["--version"])
+        .unwrap_or_else(|_| "not found (optional)".to_string());
+    println!("gh:              {gh}");
+    println!(
+        "\nSetup complete. Run `lyra doctor` for full checks, then `lyra add` + `lyra conduct start`."
+    );
+    Ok(0)
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -680,6 +755,9 @@ pub fn run() -> Result<()> {
                 "Policy:   max_parallel={} approval={:?} merge={:?}",
                 loaded.max_parallel, loaded.approval_posture, loaded.merge
             );
+        }
+        Some(Command::Setup) => {
+            std::process::exit(run_setup()?);
         }
         Some(Command::Import {
             kind,

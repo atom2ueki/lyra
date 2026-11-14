@@ -134,16 +134,40 @@ pub fn select_backend() -> Result<Box<dyn PaneBackend>> {
     select_backend_with_env(&env, std::io::IsTerminal::is_terminal(&std::io::stdout()))
 }
 
-pub fn select_backend_with_env(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendChoice {
+    pub name: String,
+    pub source: &'static str,
+}
+
+/// Resolve the pane backend: an explicit environment override wins, then the
+/// persisted user config (`pane_backend` in config.toml, written by
+/// `lyra setup`), then ambient terminal detection.
+pub fn resolve_backend_with_env(
     env: &HashMap<String, String>,
     stdout_is_tty: bool,
-) -> Result<Box<dyn PaneBackend>> {
+) -> Result<BackendChoice> {
     if let Some(explicit) = env.get("LYRA_PANE_BACKEND") {
         return backend_by_name(explicit)
+            .map(|_| BackendChoice {
+                name: explicit.clone(),
+                source: "env",
+            })
             .map_err(|_| anyhow::anyhow!("unknown LYRA_PANE_BACKEND: {explicit}"));
     }
+    if let Ok(config) = crate::config::load_config()
+        && let Some(configured) = config.pane_backend
+    {
+        return backend_by_name(&configured).map(|_| BackendChoice {
+            name: configured,
+            source: "config",
+        });
+    }
     if env.get("HERDR_ENV").map(String::as_str) == Some("1") {
-        return Ok(Box::new(herdr::HerdrBackend::new()));
+        return Ok(BackendChoice {
+            name: "herdr".to_string(),
+            source: "detected",
+        });
     }
     if env.contains_key("TMUX") {
         bail!("tmux backend is not implemented yet; use herdr, Ghostty, or headless");
@@ -154,10 +178,31 @@ pub fn select_backend_with_env(
     if env.get("TERM_PROGRAM").map(String::as_str) == Some("ghostty")
         || env.contains_key("GHOSTTY_TERMINAL_ID")
     {
-        return Ok(Box::new(ghostty::GhosttyBackend::new()));
+        return Ok(BackendChoice {
+            name: "ghostty".to_string(),
+            source: "detected",
+        });
     }
     if !stdout_is_tty {
-        return Ok(Box::new(headless::HeadlessBackend::new()));
+        return Ok(BackendChoice {
+            name: "headless".to_string(),
+            source: "detected",
+        });
     }
-    bail!("no pane backend detected; set LYRA_PANE_BACKEND=herdr|ghostty|headless")
+    bail!(
+        "no pane backend detected; run `lyra setup` or set LYRA_PANE_BACKEND=herdr|ghostty|headless"
+    )
+}
+
+pub fn resolve_backend() -> Result<BackendChoice> {
+    let env = std::env::vars().collect::<HashMap<_, _>>();
+    resolve_backend_with_env(&env, std::io::IsTerminal::is_terminal(&std::io::stdout()))
+}
+
+pub fn select_backend_with_env(
+    env: &HashMap<String, String>,
+    stdout_is_tty: bool,
+) -> Result<Box<dyn PaneBackend>> {
+    let choice = resolve_backend_with_env(env, stdout_is_tty)?;
+    backend_by_name(&choice.name)
 }

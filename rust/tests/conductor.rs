@@ -110,6 +110,7 @@ fn conductor_runs_a_headless_omp_worker_and_closes() {
         max_per_provider: HashMap::new(),
         approval_posture: ApprovalPosture::Ask,
         merge: MergeMode::Auto,
+        pane_backend: None,
     };
     let started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -216,6 +217,7 @@ PY
         max_per_provider: HashMap::new(),
         approval_posture: ApprovalPosture::Ask,
         merge: MergeMode::Auto,
+        pane_backend: None,
     };
     let _first = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -343,6 +345,7 @@ fn conductor_schedules_a_four_ticket_dag_two_at_a_time() {
         max_per_provider: HashMap::new(),
         approval_posture: ApprovalPosture::Ask,
         merge: MergeMode::Auto,
+        pane_backend: None,
     };
     let started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -437,6 +440,7 @@ fn conductor_applies_model_policy_and_writes_worker_roles() {
             max_per_provider: HashMap::new(),
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
+            pane_backend: None,
         },
         backend: Some(Box::new(HeadlessBackend::new())),
         max_parallel: None,
@@ -532,6 +536,7 @@ PY
         max_per_provider: HashMap::new(),
         approval_posture: ApprovalPosture::Ask,
         merge: MergeMode::Auto,
+        pane_backend: None,
     };
     let _started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -641,6 +646,7 @@ fn provider_cap_overflows_to_the_next_candidate() {
             max_per_provider: HashMap::from([("dgx".to_string(), 2)]),
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
+            pane_backend: None,
         },
         backend: Some(Box::new(HeadlessBackend::new())),
         max_parallel: Some(4),
@@ -779,6 +785,7 @@ fn non_omp_harness_uses_result_md_fallback() {
             max_per_provider: HashMap::new(),
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
+            pane_backend: None,
         },
         backend: Some(Box::new(backend)),
         max_parallel: None,
@@ -884,6 +891,7 @@ fn failed_launch_releases_the_worktree_and_branch() {
             max_per_provider: HashMap::new(),
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
+            pane_backend: None,
         },
         backend: Some(Box::new(FailingStartBackend)),
         max_parallel: None,
@@ -948,6 +956,7 @@ fn launch_failures_are_capped_and_the_ticket_fails() {
             max_per_provider: HashMap::new(),
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
+            pane_backend: None,
         },
         backend: Some(Box::new(FailingStartBackend)),
         max_parallel: None,
@@ -1043,6 +1052,7 @@ fn capped_resume_failures_keep_the_checkpoint_and_ask_for_input() {
             max_per_provider: HashMap::new(),
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
+            pane_backend: None,
         },
         backend: Some(Box::new(HeadlessBackend::new())),
         max_parallel: None,

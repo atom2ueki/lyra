@@ -92,3 +92,91 @@ fn imports_and_reports_status() {
     assert!(graph_text.contains("flowchart TD"));
     assert!(graph_text.contains("T-001"));
 }
+
+#[test]
+fn setup_persists_pane_backend_and_doctor_reports_the_source() {
+    let home = tempdir().unwrap();
+    let repo = tempdir().unwrap();
+    let run = |args: &[&str], pane_env: Option<&str>| {
+        let mut command = Command::new(bin());
+        command
+            .args(args)
+            .env("LYRA_HOME", home.path())
+            .env("LYRA_OMP_BIN", "/bin/echo")
+            .env_remove("HERDR_ENV")
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("TERM_PROGRAM")
+            .env_remove("GHOSTTY_TERMINAL_ID")
+            .env_remove("TMUX")
+            .env_remove("ZELLIJ");
+        if let Some(value) = pane_env {
+            command.env("LYRA_PANE_BACKEND", value);
+        } else {
+            command.env_remove("LYRA_PANE_BACKEND");
+        }
+        command.current_dir(repo.path()).output().unwrap()
+    };
+
+    // Explicit env wins and is not persisted.
+    let env_run = run(&["setup"], Some("headless"));
+    let env_out = String::from_utf8_lossy(&env_run.stdout).to_string();
+    assert!(env_run.status.success(), "setup failed: {env_out}");
+    assert!(
+        env_out.contains("headless (env)"),
+        "unexpected output: {env_out}"
+    );
+    let config = fs::read_to_string(home.path().join("config.toml")).unwrap();
+    assert!(
+        !config.contains("pane_backend"),
+        "env override must not persist: {config}"
+    );
+
+    // Without env or config, detection runs and persists the choice.
+    let detected_run = run(&["setup"], None);
+    let detected_out = String::from_utf8_lossy(&detected_run.stdout).to_string();
+    assert!(
+        detected_run.status.success(),
+        "setup failed: {detected_out}"
+    );
+    assert!(
+        detected_out.contains("headless (detected) — saved to config"),
+        "unexpected output: {detected_out}"
+    );
+    let config = fs::read_to_string(home.path().join("config.toml")).unwrap();
+    assert_eq!(
+        config.matches("pane_backend").count(),
+        1,
+        "config: {config}"
+    );
+
+    // Once persisted, config wins over detection and setup is idempotent.
+    let again = run(&["setup"], None);
+    assert!(again.status.success());
+    let config = fs::read_to_string(home.path().join("config.toml")).unwrap();
+    assert_eq!(
+        config.matches("pane_backend").count(),
+        1,
+        "config: {config}"
+    );
+
+    let doctor = run(&["doctor"], None);
+    let doctor_out = String::from_utf8_lossy(&doctor.stdout).to_string();
+    assert!(
+        doctor_out.contains("pane backend  headless (config)"),
+        "doctor output: {doctor_out}"
+    );
+
+    // An invalid configured backend must fail loudly, not silently fall back.
+    fs::write(
+        home.path().join("config.toml"),
+        "max_parallel = 2\npane_backend = \"bogus\"\n",
+    )
+    .unwrap();
+    let broken = run(&["doctor"], None);
+    assert_eq!(broken.status.code(), Some(1));
+    let broken_out = String::from_utf8_lossy(&broken.stdout).to_string();
+    assert!(
+        broken_out.contains("pane_backend must be herdr|ghostty|headless"),
+        "doctor output: {broken_out}"
+    );
+}

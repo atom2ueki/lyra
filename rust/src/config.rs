@@ -45,14 +45,15 @@ pub struct LyraConfig {
     pub max_per_provider: HashMap<String, u32>,
     pub approval_posture: ApprovalPosture,
     pub merge: MergeMode,
+    pub pane_backend: Option<String>,
 }
-
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     max_parallel: Option<u32>,
     max_per_provider: Option<HashMap<String, u32>>,
     approval_posture: Option<String>,
     merge: Option<String>,
+    pane_backend: Option<String>,
 }
 
 impl Default for LyraConfig {
@@ -62,6 +63,7 @@ impl Default for LyraConfig {
             max_per_provider: HashMap::new(),
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
+            pane_backend: None,
         }
     }
 }
@@ -117,10 +119,69 @@ pub fn load_config() -> Result<LyraConfig> {
         Some("manual") => MergeMode::Manual,
         _ => MergeMode::Auto,
     };
+    let pane_backend = match raw.pane_backend.as_deref() {
+        None => None,
+        Some(value) => {
+            if PANE_BACKENDS.contains(&value) {
+                Some(value.to_string())
+            } else {
+                anyhow::bail!(
+                    "{}: pane_backend must be {}",
+                    path.display(),
+                    PANE_BACKENDS.join("|")
+                );
+            }
+        }
+    };
     Ok(LyraConfig {
         max_parallel,
         max_per_provider: raw.max_per_provider.unwrap_or_default(),
         approval_posture,
         merge,
+        pane_backend,
     })
+}
+
+pub const PANE_BACKENDS: [&str; 3] = ["herdr", "ghostty", "headless"];
+
+/// Persist the pane backend choice in the user config, preserving comments and
+/// unknown keys by upserting a single top-level line.
+pub fn set_pane_backend(name: &str) -> Result<PathBuf> {
+    if !PANE_BACKENDS.contains(&name) {
+        anyhow::bail!("pane_backend must be {}", PANE_BACKENDS.join("|"));
+    }
+    let path = ensure_config()?;
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let line = format!("pane_backend = \"{name}\"");
+    let mut replaced = false;
+    let mut lines: Vec<String> = Vec::new();
+    let mut inserted = false;
+    for existing in text.lines() {
+        let trimmed = existing.trim_start();
+        if !inserted
+            && trimmed.starts_with('[')
+            && !replaced
+            && !text
+                .lines()
+                .any(|line| line.trim_start().starts_with("pane_backend"))
+        {
+            lines.push(line.clone());
+            inserted = true;
+        }
+        if trimmed.starts_with("pane_backend") {
+            lines.push(line.clone());
+            replaced = true;
+        } else {
+            lines.push(existing.to_string());
+        }
+    }
+    if !replaced && !inserted {
+        lines.push(line);
+    }
+    let mut updated = lines.join("\n");
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    fs::write(&path, &updated).with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
 }
