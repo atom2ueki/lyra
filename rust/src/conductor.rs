@@ -9,7 +9,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use crate::config::{ApprovalPosture, LyraConfig, MergeMode};
+use crate::config::{ApprovalPosture, LyraConfig, MergeMode, WorkerLayout};
 use crate::models::{
     ModelInfo, ModelPolicy, UsageReport, load_model_catalog, load_policy, load_usage, provider_of,
     select_model, subagent_roles, write_role_overlay,
@@ -112,6 +112,8 @@ pub struct RunState {
     pub max_parallel: u32,
     pub max_per_provider: HashMap<String, u32>,
     pub approval: ApprovalPosture,
+    #[serde(default)]
+    pub worker_layout: WorkerLayout,
     pub backend: String,
     pub base_ref: String,
     pub created_at: String,
@@ -291,6 +293,27 @@ struct LaunchContext<'a> {
     usage: &'a [UsageReport],
 }
 
+/// Open the surface a worker occupies: a sibling pane by default, a tab when
+/// the layout asks for one or when additional workers would fragment the
+/// anchor tab. Backends without tabs fall back to a split inside `open_tab`.
+fn open_worker_surface(
+    backend: &dyn PaneBackend,
+    anchor: &PaneHandle,
+    layout: WorkerLayout,
+    workers_running: usize,
+    options: &SplitOptions,
+) -> Result<PaneHandle> {
+    let use_tab = match layout {
+        WorkerLayout::Pane => false,
+        WorkerLayout::Tab => true,
+        WorkerLayout::Auto => workers_running > 0,
+    };
+    if use_tab {
+        backend.open_tab(anchor, options)
+    } else {
+        backend.split(anchor, options)
+    }
+}
 fn launch_ticket(
     state: &mut RunState,
     ticket: &Ticket,
@@ -316,6 +339,26 @@ fn launch_ticket(
     )?
     .ok_or_else(|| anyhow::anyhow!("ticket {} is no longer claimable", ticket.id))?;
 
+    let worker_name = format!("lyra-{}", ticket.id.to_lowercase())
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let workers_running = state
+        .tickets
+        .values()
+        .filter(|ticket| {
+            matches!(
+                ticket.status,
+                RunTicketStatus::Running | RunTicketStatus::Starting
+            )
+        })
+        .count();
     let mut pane: Option<PaneHandle> = None;
     let mut worktree: Option<WorktreeInfo> = None;
     let mut launched_model: Option<String> = None;
@@ -434,16 +477,6 @@ fn launch_ticket(
         write_task_brief(&paths, &brief)?;
 
         let harness = ticket.harness.clone().unwrap_or_else(|| "omp".to_string());
-        let worker_name = format!("lyra-{}", ticket.id.to_lowercase())
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_' {
-                    ch
-                } else {
-                    '-'
-                }
-            })
-            .collect::<String>();
         let mut env = HashMap::new();
         env.insert(
             "LYRA_WORKER_CONFIG".to_string(),
@@ -459,8 +492,11 @@ fn launch_ticket(
             );
             let capabilities = backend.capabilities();
             if capabilities.start_agent {
-                pane = Some(backend.split(
+                pane = Some(open_worker_surface(
+                    backend,
                     anchor,
+                    state.worker_layout,
+                    workers_running,
                     &SplitOptions {
                         direction: SplitDirection::Right,
                         cwd: tree.dir.clone(),
@@ -473,7 +509,7 @@ fn launch_ticket(
                     pane.as_ref().unwrap(),
                     &StartAgentOptions {
                         kind: "omp".to_string(),
-                        name: Some(worker_name),
+                        name: Some(worker_name.clone()),
                         args,
                     },
                 )?;
@@ -488,8 +524,11 @@ fn launch_ticket(
                         paths.config.display().to_string(),
                     )]),
                 );
-                pane = Some(backend.split(
+                pane = Some(open_worker_surface(
+                    backend,
                     anchor,
+                    state.worker_layout,
+                    workers_running,
                     &SplitOptions {
                         direction: SplitDirection::Right,
                         cwd: tree.dir.clone(),
@@ -510,8 +549,11 @@ fn launch_ticket(
                     harness
                 );
             }
-            pane = Some(backend.split(
+            pane = Some(open_worker_surface(
+                backend,
                 anchor,
+                state.worker_layout,
+                workers_running,
                 &SplitOptions {
                     direction: SplitDirection::Right,
                     cwd: tree.dir.clone(),
@@ -524,7 +566,7 @@ fn launch_ticket(
                 pane.as_ref().unwrap(),
                 &StartAgentOptions {
                     kind: harness,
-                    name: Some(worker_name),
+                    name: Some(worker_name.clone()),
                     args: Vec::new(),
                 },
             )?;
@@ -542,6 +584,9 @@ fn launch_ticket(
 
     match result {
         Ok(()) => {
+            if let Some(pane) = &pane {
+                let _ = backend.label(pane, &worker_name);
+            }
             let now = now_iso();
             state.tickets.insert(
                 ticket.id.clone(),
@@ -760,6 +805,7 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
         max_parallel,
         max_per_provider: options.config.max_per_provider.clone(),
         approval: options.config.approval_posture,
+        worker_layout: options.config.worker_layout,
         backend: backend.name().to_string(),
         base_ref: base_ref.clone(),
         created_at: now_iso(),
@@ -1031,6 +1077,7 @@ fn launch_ready(state: &mut RunState, backend: &dyn PaneBackend, max_parallel: u
         approval_posture: state.approval,
         merge: MergeMode::Auto,
         pane_backend: None,
+        worker_layout: state.worker_layout,
     };
     let ready: Vec<Ticket> = ready_tickets(&tickets)
         .into_iter()
@@ -1288,6 +1335,7 @@ mod tests {
             max_parallel: 1,
             max_per_provider: HashMap::new(),
             approval: ApprovalPosture::Ask,
+            worker_layout: WorkerLayout::Auto,
             backend: "headless".to_string(),
             base_ref: "main".to_string(),
             created_at: now_iso(),

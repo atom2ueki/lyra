@@ -91,6 +91,17 @@ pub trait PaneBackend {
     fn capabilities(&self) -> Capabilities;
     fn anchor(&self) -> Result<PaneHandle>;
     fn split(&self, anchor: &PaneHandle, options: &SplitOptions) -> Result<PaneHandle>;
+    /// Open a tab and return its initial pane. Backends without tabs fall back
+    /// to a split so callers can honor a layout preference without gating on
+    /// Capabilities.tabs.
+    fn open_tab(&self, anchor: &PaneHandle, options: &SplitOptions) -> Result<PaneHandle> {
+        self.split(anchor, options)
+    }
+    /// Label a pane for the operator UI (tab or pane title). Best-effort:
+    /// the default does nothing and callers ignore errors.
+    fn label(&self, _pane: &PaneHandle, _label: &str) -> Result<()> {
+        Ok(())
+    }
     fn start_agent(&self, _pane: &PaneHandle, _options: &StartAgentOptions) -> Result<()> {
         bail!("backend cannot start agents")
     }

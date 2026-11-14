@@ -39,6 +39,26 @@ pub enum MergeMode {
     Manual,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkerLayout {
+    Pane,
+    Tab,
+    #[default]
+    Auto,
+}
+
+impl WorkerLayout {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pane" => Some(Self::Pane),
+            "tab" => Some(Self::Tab),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LyraConfig {
     pub max_parallel: u32,
@@ -46,6 +66,7 @@ pub struct LyraConfig {
     pub approval_posture: ApprovalPosture,
     pub merge: MergeMode,
     pub pane_backend: Option<String>,
+    pub worker_layout: WorkerLayout,
 }
 #[derive(Debug, Deserialize)]
 struct RawConfig {
@@ -54,6 +75,7 @@ struct RawConfig {
     approval_posture: Option<String>,
     merge: Option<String>,
     pane_backend: Option<String>,
+    worker_layout: Option<String>,
 }
 
 impl Default for LyraConfig {
@@ -64,6 +86,7 @@ impl Default for LyraConfig {
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
             pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
         }
     }
 }
@@ -133,12 +156,19 @@ pub fn load_config() -> Result<LyraConfig> {
             }
         }
     };
+    let worker_layout = match raw.worker_layout.as_deref() {
+        None => WorkerLayout::default(),
+        Some(value) => WorkerLayout::parse(value).ok_or_else(|| {
+            anyhow::anyhow!("{}: worker_layout must be pane|tab|auto", path.display())
+        })?,
+    };
     Ok(LyraConfig {
         max_parallel,
         max_per_provider: raw.max_per_provider.unwrap_or_default(),
         approval_posture,
         merge,
         pane_backend,
+        worker_layout,
     })
 }
 

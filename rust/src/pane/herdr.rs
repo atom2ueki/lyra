@@ -48,16 +48,10 @@ impl HerdrBackend {
         self.json(&["agent", "get", name]).is_ok()
     }
 
-    fn label_pane(&self, pane: &str, label: &str) {
-        // Cosmetic: keep worker panes identifiable in the herdr UI. A failed
-        // rename must never fail the launch.
-        let _ = self.run(&["pane", "rename", pane, label]);
-    }
-
     fn pane_from_value(value: &Value) -> Result<PaneHandle> {
         let pane = value
             .get("result")
-            .and_then(|result| result.get("pane"))
+            .and_then(|result| result.get("pane").or_else(|| result.get("root_pane")))
             .or_else(|| value.get("pane"))
             .unwrap_or(value);
         let pane_id = pane
@@ -148,6 +142,29 @@ impl PaneBackend for HerdrBackend {
         Self::pane_from_value(&value)
     }
 
+    fn open_tab(&self, anchor: &PaneHandle, options: &SplitOptions) -> Result<PaneHandle> {
+        let mut args = vec!["tab".to_string(), "create".to_string()];
+        if let Some(workspace) = &anchor.workspace {
+            args.push("--workspace".to_string());
+            args.push(workspace.clone());
+        }
+        args.push("--cwd".to_string());
+        args.push(options.cwd.display().to_string());
+        args.push("--no-focus".to_string());
+        for (key, value) in &options.env {
+            args.push("--env".to_string());
+            args.push(format!("{key}={value}"));
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let value = self.json(&refs)?;
+        Self::pane_from_value(&value)
+    }
+
+    fn label(&self, pane: &PaneHandle, label: &str) -> Result<()> {
+        self.run(&["pane", "rename", &pane.pane, label])?;
+        Ok(())
+    }
+
     fn start_agent(&self, pane: &PaneHandle, options: &StartAgentOptions) -> Result<()> {
         let name = options
             .name
@@ -169,12 +186,10 @@ impl PaneBackend for HerdrBackend {
             if format!("{error:#}").contains("agent_not_ready") && self.agent_exists(&name) {
                 // herdr's startup gate waits for an interactively ready agent;
                 // a worker that starts its task immediately is healthy, not failed.
-                self.label_pane(&pane.pane, &name);
                 return Ok(());
             }
             return Err(error);
         }
-        self.label_pane(&pane.pane, &name);
         Ok(())
     }
     fn send_text(&self, pane: &PaneHandle, text: &str, submit: bool) -> Result<()> {
@@ -296,12 +311,14 @@ impl PaneBackend for HerdrBackend {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
     use super::*;
+    use crate::pane::SplitDirection;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -325,6 +342,10 @@ case "$1 $2" in
     ;;
   "pane rename")
     printf '%s %s\n' "$3" "$4" >> "${{LYRA_HERDR_RENAME_LOG:?}}"
+    exit 0
+    ;;
+  "tab create")
+    echo '{{"id":"cli:tab:create","result":{{"tab":{{"tab_id":"w1:t9"}},"root_pane":{{"pane_id":"w1:p9","tab_id":"w1:t9"}}}}}}'
     exit 0
     ;;
 esac
@@ -363,12 +384,44 @@ exit 2
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let bin = fake_herdr(dir.path(), true);
+        unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
+        start(&HerdrBackend::new()).unwrap();
+    }
+
+    #[test]
+    fn open_tab_returns_the_root_pane() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_herdr(dir.path(), false);
+        unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
+        let backend = HerdrBackend::new();
+        let handle = backend
+            .open_tab(
+                &pane(),
+                &SplitOptions {
+                    direction: SplitDirection::Right,
+                    cwd: dir.path().to_path_buf(),
+                    command: None,
+                    env: HashMap::new(),
+                    log_dir: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(handle.pane, "w1:p9");
+        assert_eq!(handle.tab.as_deref(), Some("w1:t9"));
+    }
+
+    #[test]
+    fn label_renames_the_pane() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_herdr(dir.path(), false);
         let rename_log = dir.path().join("renames.log");
         unsafe {
             std::env::set_var("LYRA_HERDR_BIN", &bin);
             std::env::set_var("LYRA_HERDR_RENAME_LOG", &rename_log);
         }
-        start(&HerdrBackend::new()).unwrap();
+        HerdrBackend::new().label(&pane(), "lyra-worker").unwrap();
         assert_eq!(
             fs::read_to_string(&rename_log).unwrap(),
             "w1:p2 lyra-worker\n"

@@ -23,6 +23,9 @@ Implemented:
   `pane_backend` key in `config.toml` (written by `lyra setup`), then terminal detection.
   New terminals are added as `PaneBackend` implementations; there is no runtime plugin
   system by design.
+- `worker_layout = pane|tab|auto` in `config.toml`: where workers appear. `auto` (default)
+  puts the first worker in a sibling pane of the orchestrator and each additional worker
+  in its own tab; every worker surface is labeled `lyra-<ticket>`.
 - worker extension (`lyra_progress`, `lyra_discover`, `lyra_finish`)
 - `lyra conduct start|monitor|resume|stop|report`, `lyra add`, `lyra logs`, `lyra close`
 - run-scoped worktrees, claims, state/events
@@ -83,6 +86,12 @@ resolves the pane backend, and persists it as `pane_backend` in `~/.lyra/config.
 (herdr and Ghostty give visible workers; headless runs them invisibly).
 `LYRA_PANE_BACKEND=herdr|ghostty|headless` overrides config for one invocation;
 `LYRA_OMP_BIN` overrides the `omp` binary for tests.
+
+Roles: the **orchestrator** (the human plus the lead agent session) owns the ticket
+store — only it creates and updates tickets. The **conductor** is the Lyra run engine
+that claims, launches, and settles workers. A **worker** implements exactly one ticket
+in its run worktree and reports back through its result channel and `lyra_discover`;
+it never edits the store.
 
 New tickets use readable `AdjectiveNoun` ids such as `QuietHarbor`; legacy `T-001` ids from
 imported stores remain valid.

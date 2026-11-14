@@ -3,7 +3,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -17,7 +17,7 @@ use lyra::conductor::{
     MonitorOptions, RunStatus, RunTicketStatus, StartOptions, close_run, monitor_run, run_dir_for,
     start_run,
 };
-use lyra::config::{ApprovalPosture, LyraConfig, MergeMode};
+use lyra::config::{ApprovalPosture, LyraConfig, MergeMode, WorkerLayout};
 use lyra::pane::headless::HeadlessBackend;
 use lyra::schema::TicketStatus;
 use lyra::store::{
@@ -111,6 +111,7 @@ fn conductor_runs_a_headless_omp_worker_and_closes() {
         approval_posture: ApprovalPosture::Ask,
         merge: MergeMode::Auto,
         pane_backend: None,
+        worker_layout: WorkerLayout::Auto,
     };
     let started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -218,6 +219,7 @@ PY
         approval_posture: ApprovalPosture::Ask,
         merge: MergeMode::Auto,
         pane_backend: None,
+        worker_layout: WorkerLayout::Auto,
     };
     let _first = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -346,6 +348,7 @@ fn conductor_schedules_a_four_ticket_dag_two_at_a_time() {
         approval_posture: ApprovalPosture::Ask,
         merge: MergeMode::Auto,
         pane_backend: None,
+        worker_layout: WorkerLayout::Auto,
     };
     let started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -441,6 +444,7 @@ fn conductor_applies_model_policy_and_writes_worker_roles() {
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
             pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
         },
         backend: Some(Box::new(HeadlessBackend::new())),
         max_parallel: None,
@@ -537,6 +541,7 @@ PY
         approval_posture: ApprovalPosture::Ask,
         merge: MergeMode::Auto,
         pane_backend: None,
+        worker_layout: WorkerLayout::Auto,
     };
     let _started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -647,6 +652,7 @@ fn provider_cap_overflows_to_the_next_candidate() {
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
             pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
         },
         backend: Some(Box::new(HeadlessBackend::new())),
         max_parallel: Some(4),
@@ -675,8 +681,10 @@ fn provider_cap_overflows_to_the_next_candidate() {
 
 #[derive(Default)]
 struct RecordingBackend {
-    env: Mutex<HashMap<String, String>>,
-    started: Mutex<Vec<String>>,
+    env: Arc<Mutex<HashMap<String, String>>>,
+    started: Arc<Mutex<Vec<String>>>,
+    opened: Arc<Mutex<Vec<&'static str>>>,
+    labels: Arc<Mutex<Vec<String>>>,
 }
 
 impl lyra::pane::PaneBackend for RecordingBackend {
@@ -708,11 +716,31 @@ impl lyra::pane::PaneBackend for RecordingBackend {
         options: &lyra::pane::SplitOptions,
     ) -> anyhow::Result<lyra::pane::PaneHandle> {
         *self.env.lock().unwrap() = options.env.clone();
+        self.opened.lock().unwrap().push("pane");
         Ok(lyra::pane::PaneHandle {
             backend: "recording".to_string(),
             pane: "worker".to_string(),
             ..Default::default()
         })
+    }
+
+    fn open_tab(
+        &self,
+        _anchor: &lyra::pane::PaneHandle,
+        options: &lyra::pane::SplitOptions,
+    ) -> anyhow::Result<lyra::pane::PaneHandle> {
+        *self.env.lock().unwrap() = options.env.clone();
+        self.opened.lock().unwrap().push("tab");
+        Ok(lyra::pane::PaneHandle {
+            backend: "recording".to_string(),
+            pane: "worker-tab".to_string(),
+            ..Default::default()
+        })
+    }
+
+    fn label(&self, _pane: &lyra::pane::PaneHandle, label: &str) -> anyhow::Result<()> {
+        self.labels.lock().unwrap().push(label.to_string());
+        Ok(())
     }
 
     fn start_agent(
@@ -786,6 +814,7 @@ fn non_omp_harness_uses_result_md_fallback() {
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
             pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
         },
         backend: Some(Box::new(backend)),
         max_parallel: None,
@@ -892,6 +921,7 @@ fn failed_launch_releases_the_worktree_and_branch() {
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
             pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
         },
         backend: Some(Box::new(FailingStartBackend)),
         max_parallel: None,
@@ -957,6 +987,7 @@ fn launch_failures_are_capped_and_the_ticket_fails() {
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
             pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
         },
         backend: Some(Box::new(FailingStartBackend)),
         max_parallel: None,
@@ -1053,6 +1084,7 @@ fn capped_resume_failures_keep_the_checkpoint_and_ask_for_input() {
             approval_posture: ApprovalPosture::Ask,
             merge: MergeMode::Auto,
             pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
         },
         backend: Some(Box::new(HeadlessBackend::new())),
         max_parallel: None,
@@ -1094,4 +1126,70 @@ fn capped_resume_failures_keep_the_checkpoint_and_ask_for_input() {
     assert_eq!(suspension.branch, "lyra/run-old/Ticket");
     assert_eq!(suspension.base_head, "deadbeef");
     assert_eq!(tickets[0].status, TicketStatus::Todo);
+}
+
+#[test]
+fn worker_layout_controls_the_worker_surface() {
+    let _guard = lock_env();
+    for (layout, expected) in [
+        (WorkerLayout::Auto, vec!["pane", "tab"]),
+        (WorkerLayout::Pane, vec!["pane", "pane"]),
+        (WorkerLayout::Tab, vec!["tab", "tab"]),
+    ] {
+        let dir = repo();
+        let store = dir.path().join(".lyra/store");
+        ensure_store(&store).unwrap();
+        for subject in ["first", "second"] {
+            create_ticket(
+                &store,
+                NewTicket {
+                    project_id: "test-project".to_string(),
+                    subject: subject.to_string(),
+                    prompt: format!("Do {subject}"),
+                    blocked_by: Vec::new(),
+                    priority: 2,
+                    labels: Vec::new(),
+                    model_class: None,
+                    acceptance: None,
+                    plan: None,
+                    parent: None,
+                    origin: Some("test".to_string()),
+                    harness: Some("omp".to_string()),
+                },
+            )
+            .unwrap();
+        }
+        unsafe { std::env::set_var("LYRA_OMP_BIN", fake_omp(dir.path())) };
+        let backend = RecordingBackend::default();
+        let opened = backend.opened.clone();
+        let labels = backend.labels.clone();
+        start_run(StartOptions {
+            repo: dir.path().to_path_buf(),
+            store: store.clone(),
+            project_id: "test-project".to_string(),
+            config: LyraConfig {
+                max_parallel: 2,
+                max_per_provider: HashMap::new(),
+                approval_posture: ApprovalPosture::Ask,
+                merge: MergeMode::Auto,
+                pane_backend: None,
+                worker_layout: layout,
+            },
+            backend: Some(Box::new(backend)),
+            max_parallel: Some(2),
+            max_seconds: Some(10),
+            ticket_ids: Vec::new(),
+            base_ref: None,
+            dry_run: false,
+            run_id: Some(format!("run-layout-{}", expected[0])),
+            model_policy: None,
+            models: Some(Vec::new()),
+            usage: Some(Vec::new()),
+        })
+        .unwrap();
+        assert_eq!(*opened.lock().unwrap(), expected, "layout {layout:?}");
+        let labels = labels.lock().unwrap().clone();
+        assert_eq!(labels.len(), 2, "both workers labeled, got {labels:?}");
+        assert!(labels.iter().all(|label| label.starts_with("lyra-")));
+    }
 }
