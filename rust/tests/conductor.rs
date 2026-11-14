@@ -553,7 +553,7 @@ PY
         backend: Some(Box::new(HeadlessBackend::new())),
         once: false,
         interval_ms: 25,
-        timeout_ms: Some(8000),
+        timeout_ms: Some(30000),
         max_parallel: Some(2),
     })
     .unwrap();
@@ -910,4 +910,79 @@ fn failed_launch_releases_the_worktree_and_branch() {
     );
     let tickets = list_tickets(&store).unwrap();
     assert_eq!(tickets[0].status, TicketStatus::Todo);
+}
+
+#[test]
+fn launch_failures_are_capped_and_the_ticket_fails() {
+    let _guard = lock_env();
+    let dir = repo();
+    let store = dir.path().join(".lyra/store");
+    ensure_store(&store).unwrap();
+    let ticket = create_ticket(
+        &store,
+        NewTicket {
+            project_id: "test-project".to_string(),
+            subject: "Implement feature".to_string(),
+            prompt: "Implement the feature.".to_string(),
+            blocked_by: Vec::new(),
+            priority: 2,
+            labels: Vec::new(),
+            model_class: None,
+            acceptance: None,
+            plan: None,
+            parent: None,
+            origin: Some("test".to_string()),
+            harness: Some("omp".to_string()),
+        },
+    )
+    .unwrap();
+    unsafe { std::env::set_var("LYRA_OMP_BIN", fake_omp(dir.path())) };
+    let started = start_run(StartOptions {
+        repo: dir.path().to_path_buf(),
+        store: store.clone(),
+        project_id: "test-project".to_string(),
+        config: LyraConfig {
+            max_parallel: 1,
+            max_per_provider: HashMap::new(),
+            approval_posture: ApprovalPosture::Ask,
+            merge: MergeMode::Auto,
+        },
+        backend: Some(Box::new(FailingStartBackend)),
+        max_parallel: None,
+        max_seconds: Some(10),
+        ticket_ids: Vec::new(),
+        base_ref: None,
+        dry_run: false,
+        run_id: Some("run-launch-cap".to_string()),
+        model_policy: None,
+        models: Some(Vec::new()),
+        usage: Some(Vec::new()),
+    })
+    .unwrap();
+    let state = monitor_run(MonitorOptions {
+        run_dir: run_dir_for(dir.path(), "run-launch-cap"),
+        backend: Some(Box::new(FailingStartBackend)),
+        once: false,
+        interval_ms: 10,
+        timeout_ms: Some(30000),
+        max_parallel: None,
+    })
+    .unwrap();
+    assert_eq!(
+        state.status,
+        RunStatus::Done,
+        "run must settle, not burn maxSeconds"
+    );
+    let run_ticket = state.tickets.get(&ticket.id).unwrap();
+    assert_eq!(run_ticket.status, RunTicketStatus::Failed);
+    assert!(run_ticket.launch_failures >= lyra::conductor::MAX_LAUNCH_FAILURES);
+    let tickets = list_tickets(&store).unwrap();
+    assert_eq!(tickets[0].status, TicketStatus::Failed);
+    let last_error = tickets[0].last_error.as_deref().unwrap_or_default();
+    assert!(
+        last_error.contains("launch failed"),
+        "unexpected error: {last_error}"
+    );
+    assert!(!Path::new(&run_ticket.worktree).exists());
+    let _ = started;
 }

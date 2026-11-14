@@ -34,6 +34,9 @@ use crate::worktree::{
     remove_worktree, resume_worktree,
 };
 
+/// Consecutive launch failures tolerated for one ticket within a run before the
+/// ticket is marked failed in the store instead of being relaunched.
+pub const MAX_LAUNCH_FAILURES: u32 = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
@@ -92,6 +95,8 @@ pub struct RunTicketState {
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default)]
+    pub launch_failures: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,11 +222,17 @@ pub fn save_state(state: &mut RunState) -> Result<()> {
     Ok(())
 }
 
+// Workers cannot answer approval prompts: the headless backend has no TTY and
+// pane backends would stall until a human notices. "write" still gates bash, so
+// the default posture maps to yolo; the isolation boundary is the run worktree,
+// the run branch, and lead-side review before merge. Safe keeps prompting for
+// operators who accept an interactive supervisor.
 fn approval_args(posture: ApprovalPosture) -> Vec<String> {
     match posture {
         ApprovalPosture::Safe => vec!["--approval-mode".into(), "always-ask".into()],
-        ApprovalPosture::Ask => vec!["--approval-mode".into(), "write".into()],
-        ApprovalPosture::Unsafe => vec!["--approval-mode".into(), "yolo".into()],
+        ApprovalPosture::Ask | ApprovalPosture::Unsafe => {
+            vec!["--approval-mode".into(), "yolo".into()]
+        }
     }
 }
 
@@ -557,19 +568,44 @@ fn launch_ticket(
                     finished_at: None,
                     result: None,
                     error: None,
+                    launch_failures: 0,
                 },
             );
             save_state(state)?;
             Ok(())
         }
         Err(error) => {
-            let _ = release_ticket(
-                Path::new(&state.store),
-                &ticket.id,
-                &state.run_id,
-                &claim_id,
-                &format!("{error:#}"),
-            );
+            let previous_failures = state
+                .tickets
+                .get(&ticket.id)
+                .map_or(0, |previous| previous.launch_failures);
+            let launch_failures = previous_failures + 1;
+            if launch_failures >= MAX_LAUNCH_FAILURES {
+                // Keep the claim so the ticket lands in the store as failed
+                // instead of cycling relaunches until maxSeconds.
+                let _ = finish_ticket(
+                    Path::new(&state.store),
+                    &ticket.id,
+                    &state.run_id,
+                    &claim_id,
+                    TicketStatus::Failed,
+                    serde_json::json!({
+                        "status": "failed",
+                        "summary": format!("launch failed {launch_failures} times"),
+                    }),
+                    Some(format!(
+                        "launch failed {launch_failures} times; last error: {error:#}"
+                    )),
+                );
+            } else {
+                let _ = release_ticket(
+                    Path::new(&state.store),
+                    &ticket.id,
+                    &state.run_id,
+                    &claim_id,
+                    &format!("{error:#}"),
+                );
+            }
             if let Some(pane) = &pane {
                 let _ = backend.close(pane);
             }
@@ -606,6 +642,7 @@ fn launch_ticket(
                     finished_at: Some(now),
                     result: None,
                     error: Some(format!("{error:#}")),
+                    launch_failures,
                 },
             );
             save_state(state)?;
@@ -974,10 +1011,17 @@ fn launch_ready(state: &mut RunState, backend: &dyn PaneBackend, max_parallel: u
                 return false;
             }
             match state.tickets.get(&ticket.id) {
-                Some(status) => matches!(
-                    status.status,
-                    RunTicketStatus::Failed | RunTicketStatus::Blocked
-                ),
+                Some(run_ticket) => {
+                    if run_ticket.status == RunTicketStatus::Failed
+                        && run_ticket.launch_failures >= MAX_LAUNCH_FAILURES
+                    {
+                        return false;
+                    }
+                    matches!(
+                        run_ticket.status,
+                        RunTicketStatus::Failed | RunTicketStatus::Blocked
+                    )
+                }
                 None => true,
             }
         })
@@ -1241,5 +1285,21 @@ mod tests {
         assert_eq!(state.revision, 3);
         let loaded = load_state(dir.path()).unwrap();
         assert_eq!(loaded.revision, 3);
+    }
+
+    #[test]
+    fn worker_approval_never_blocks_on_bash() {
+        assert_eq!(
+            approval_args(ApprovalPosture::Safe),
+            vec!["--approval-mode", "always-ask"]
+        );
+        assert_eq!(
+            approval_args(ApprovalPosture::Ask),
+            vec!["--approval-mode", "yolo"]
+        );
+        assert_eq!(
+            approval_args(ApprovalPosture::Unsafe),
+            vec!["--approval-mode", "yolo"]
+        );
     }
 }
