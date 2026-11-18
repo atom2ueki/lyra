@@ -1332,9 +1332,7 @@ PY
 fn oneshot_worker_reports_through_the_tee_log() {
     let _guard = lock_env();
     let dir = repo();
-    let _ = std::fs::remove_dir_all("/tmp/oneshot-debug");
-    let _ = std::fs::create_dir_all("/tmp/oneshot-debug");
-    std::fs::write("/tmp/oneshot-debug/marker", "keep").unwrap();
+
     let store = dir.path().join(".lyra/store");
     ensure_store(&store).unwrap();
     let ticket = create_ticket(
@@ -1408,9 +1406,6 @@ echo "blockers:"
     })
     .unwrap();
     let run_dir = run_dir_for(dir.path(), "run-oneshot");
-    let _ = std::process::Command::new("cp")
-        .args(["-r", &run_dir.display().to_string(), "/tmp/oneshot-run"])
-        .status();
     assert_eq!(
         state.status,
         RunStatus::Done,
