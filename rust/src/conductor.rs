@@ -1456,6 +1456,7 @@ pub fn stop_run(run_dir: &Path, backend: Option<Box<dyn PaneBackend>>) -> Result
         }
     }
     state.status = RunStatus::Stopped;
+    release_run_claims(Path::new(&state.store), &state.run_id);
     save_state(&mut state)?;
     Ok(state)
 }
@@ -1490,9 +1491,34 @@ pub fn close_run(run_dir: &Path) -> Result<RunState> {
             }
         }
     }
+    release_run_claims(Path::new(&state.store), &state.run_id);
     state.status = RunStatus::Closed;
     save_state(&mut state)?;
     Ok(state)
+}
+
+/// Release every store claim held by this run, not just the ones tracked in
+/// run state: a start that died between claim and save leaves orphans the
+/// state view cannot see. The store is the source of truth.
+fn release_run_claims(store: &Path, run_id: &str) {
+    let Ok(tickets) = list_tickets(store) else {
+        return;
+    };
+    for ticket in &tickets {
+        let Some(execution) = &ticket.execution else {
+            continue;
+        };
+        if execution.run_id != run_id {
+            continue;
+        }
+        let _ = release_ticket(
+            store,
+            &ticket.id,
+            run_id,
+            &execution.claim_id,
+            "run stopped or closed; claim released by store reconciliation",
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1555,5 +1581,44 @@ mod tests {
             approval_args(ApprovalPosture::Unsafe),
             vec!["--approval-mode", "yolo"]
         );
+    }
+
+    #[test]
+    fn stop_run_releases_orphan_claims_known_only_to_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join(".lyra/store");
+        crate::store::ensure_store(&store).unwrap();
+        let ticket = crate::store::create_ticket(
+            &store,
+            crate::store::NewTicket {
+                project_id: "p".to_string(),
+                subject: "Orphan".to_string(),
+                prompt: "noop".to_string(),
+                blocked_by: Vec::new(),
+                priority: 2,
+                labels: Vec::new(),
+                model_class: None,
+                acceptance: None,
+                plan: None,
+                parent: None,
+                origin: Some("test".to_string()),
+                harness: Some("omp".to_string()),
+            },
+        )
+        .unwrap();
+        let mut state = test_state(dir.path());
+        state.store = store.display().to_string();
+        // Simulate a start killed between claim and save: the store shows a
+        // claim from this run, but the run state never tracked the ticket.
+        crate::store::claim_ticket(&store, &ticket.id, &state.run_id, "claim-orphan")
+            .unwrap()
+            .unwrap();
+        let run_dir = PathBuf::from(&state.run_dir);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        save_state(&mut state).unwrap();
+        stop_run(&run_dir, None::<Box<dyn PaneBackend>>).unwrap();
+        let tickets = crate::store::list_tickets(&store).unwrap();
+        assert_eq!(tickets[0].status, crate::schema::TicketStatus::Todo);
+        assert!(tickets[0].execution.is_none());
     }
 }
