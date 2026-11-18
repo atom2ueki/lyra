@@ -828,9 +828,15 @@ fn run_setup() -> Result<i32> {
     Ok(0)
 }
 
-/// Launch a harness in a throwaway pane with a trivial prompt and wait for the
-/// word READY. Always closes the pane.
+/// Launch a harness in a throwaway pane and verify it can act: it must create
+/// the given file. The marker is a random path that never appears in the
+/// prompt echo, so a silent TUI cannot false-positive. Always closes the pane.
 fn smoke_harness(backend: &dyn PaneBackend, spec: &crate::harness::HarnessSpec) -> Result<bool> {
+    let marker = std::env::temp_dir().join(format!("lyra-smoke-{}", uuid::Uuid::new_v4()));
+    let marker_display = marker.display().to_string();
+    let prompt = format!(
+        "This is a lyra setup smoke test. Using your shell or file tool, create the file {marker_display} containing the single word ok, then stop."
+    );
     let anchor = backend.anchor()?;
     let pane = backend.split(
         &anchor,
@@ -843,20 +849,18 @@ fn smoke_harness(backend: &dyn PaneBackend, spec: &crate::harness::HarnessSpec) 
         },
     )?;
     let result = (|| -> Result<bool> {
-        let prompt = "This is a lyra setup smoke test. Reply with the single word READY and stop.";
         match &spec.launch {
             crate::harness::LaunchStyle::Omp => {
-                let argv = vec![
-                    "--approval-mode".to_string(),
-                    "yolo".to_string(),
-                    prompt.to_string(),
-                ];
                 backend.start_agent(
                     &pane,
                     &crate::pane::StartAgentOptions {
                         kind: "omp".to_string(),
                         name: Some("lyra-smoke".to_string()),
-                        args: argv,
+                        args: vec![
+                            "--approval-mode".to_string(),
+                            "yolo".to_string(),
+                            prompt.clone(),
+                        ],
                     },
                 )?;
             }
@@ -869,22 +873,39 @@ fn smoke_harness(backend: &dyn PaneBackend, spec: &crate::harness::HarnessSpec) 
                         args: args.clone(),
                     },
                 )?;
-                backend.send_text(&pane, prompt, true)?;
+                backend.send_text(&pane, &prompt, true)?;
             }
             crate::harness::LaunchStyle::Raw { command } => {
                 backend.send_text(&pane, &command.join(" "), true)?;
                 std::thread::sleep(std::time::Duration::from_secs(
                     crate::conductor::RAW_TUI_BOOT_SECS,
                 ));
-                backend.send_text(&pane, prompt, true)?;
+                backend.send_text(&pane, &prompt, true)?;
+            }
+            crate::harness::LaunchStyle::OneShot { template } => {
+                let argv: Vec<String> = template
+                    .iter()
+                    .map(|part| {
+                        if part == "{prompt}" {
+                            prompt.clone()
+                        } else {
+                            part.clone()
+                        }
+                    })
+                    .collect();
+                let mut rendered = argv[0].clone();
+                for part in &argv[1..] {
+                    rendered.push(' ');
+                    rendered.push_str(&crate::shell::shell_quote(part));
+                }
+                backend.send_text(&pane, &rendered, true)?;
             }
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            if let Ok(text) = backend.read(&pane, "recent-unwrapped", 40)
-                && text.contains("READY")
-            {
+            if marker.exists() {
+                let _ = std::fs::remove_file(&marker);
                 return Ok(true);
             }
         }

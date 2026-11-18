@@ -154,7 +154,24 @@ pub fn read_result(paths: &WorkerPaths) -> Result<Option<WorkerResult>> {
     {
         return Ok(Some(result));
     }
-    read_markdown_result(paths)
+    if let Some(result) = read_markdown_result(paths)? {
+        return Ok(Some(result));
+    }
+    read_stdout_result(paths)
+}
+
+/// One-shot harnesses cannot write outside their sandbox, so their command is
+/// wrapped in `| tee <root>/stdout.log` by the conductor and the result block
+/// is expected after a `---LYRA-RESULT---` marker line.
+fn read_stdout_result(paths: &WorkerPaths) -> Result<Option<WorkerResult>> {
+    let Ok(text) = fs::read_to_string(paths.root.join("stdout.log")) else {
+        return Ok(None);
+    };
+    let Some((_, block)) = text.rsplit_once("---LYRA-RESULT---") else {
+        return Ok(None);
+    };
+    let config = read_config(paths)?;
+    Ok(parse_result_fields(&config, block))
 }
 
 fn read_markdown_result(paths: &WorkerPaths) -> Result<Option<WorkerResult>> {
@@ -163,6 +180,10 @@ fn read_markdown_result(paths: &WorkerPaths) -> Result<Option<WorkerResult>> {
         Err(_) => return Ok(None),
     };
     let config = read_config(paths)?;
+    Ok(parse_result_fields(&config, &text))
+}
+
+fn parse_result_fields(config: &WorkerConfig, text: &str) -> Option<WorkerResult> {
     let mut fields = HashMap::new();
     for line in text.lines() {
         if let Some((key, value)) = line.trim().split_once(':') {
@@ -174,7 +195,7 @@ fn read_markdown_result(paths: &WorkerPaths) -> Result<Option<WorkerResult>> {
         Some("blocked") => WorkerResultStatus::Blocked,
         Some("failed") => WorkerResultStatus::Failed,
         Some("needs_input") => WorkerResultStatus::NeedsInput,
-        _ => return Ok(None),
+        _ => return None,
     };
     let blockers = fields
         .get("blockers")
@@ -187,18 +208,18 @@ fn read_markdown_result(paths: &WorkerPaths) -> Result<Option<WorkerResult>> {
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Some(WorkerResult {
+    Some(WorkerResult {
         schema_version: 1,
-        ticket_id: config.ticket_id,
-        run_id: config.run_id,
-        claim_id: config.claim_id,
+        ticket_id: config.ticket_id.clone(),
+        run_id: config.run_id.clone(),
+        claim_id: config.claim_id.clone(),
         status,
         summary: fields.get("summary").cloned(),
         verification: fields.get("verification").cloned(),
         evidence: Vec::new(),
         blockers,
         finished_at: now_iso(),
-    }))
+    })
 }
 
 pub fn list_requests(paths: &WorkerPaths) -> Result<Vec<(String, Value)>> {

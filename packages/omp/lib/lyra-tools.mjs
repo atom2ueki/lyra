@@ -376,7 +376,7 @@ export function registerLyraTools(pi, client) {
       if (params.dryRun) args.push("--dry-run");
       onUpdate?.(text("Starting Lyra run…"));
       try {
-        const run = await client.json(args, options(params, ctx, signal));
+        const run = await client.json(args, { ...options(params, ctx, signal), timeoutMs: 60_000 });
         const planned = run.plannedTickets ?? [];
         const summary = [
           `Run ${run.runId} [${run.status}] revision ${run.revision}`,

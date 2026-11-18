@@ -21,6 +21,11 @@ pub enum LaunchStyle {
     /// Pane TUI herdr does not recognize: open a pane running the command and
     /// inject the prompt with send-text. Visible, but no agent state machine.
     Raw { command: Vec<String> },
+    /// One-shot CLI whose output scrolls in the pane: the `{prompt}` template
+    /// slot becomes an argv entry, so the pane command is launched with the
+    /// task already on its command line. Visible, no boot delay, and the
+    /// process exits when the task is done.
+    OneShot { template: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +54,7 @@ impl HarnessSpec {
 /// where they are verified; harnesses without one simply ask in their TUI and
 /// the operator approves in the visible pane.
 pub fn builtin_registry() -> Vec<HarnessSpec> {
-    use LaunchStyle::{Agent, Omp, Raw};
+    use LaunchStyle::{Agent, Omp, OneShot};
     vec![
         HarnessSpec {
             name: "omp".to_string(),
@@ -59,8 +64,12 @@ pub fn builtin_registry() -> Vec<HarnessSpec> {
         HarnessSpec {
             name: "dsh".to_string(),
             binary: "dsh".to_string(),
-            launch: Raw {
-                command: vec!["dsh".to_string(), "tui".to_string()],
+            launch: OneShot {
+                template: vec![
+                    "dsh".to_string(),
+                    "headless".to_string(),
+                    "{prompt}".to_string(),
+                ],
             },
         },
         HarnessSpec {
@@ -147,8 +156,21 @@ fn parse_template(name: &str, path: &PathBuf) -> Result<HarnessSpec> {
         Some("raw") => LaunchStyle::Raw {
             command: raw.command.unwrap_or_else(|| vec![raw.binary.clone()]),
         },
-        Some(other) => bail!("{}: style must be agent|raw, got {other}", path.display()),
-        None => bail!("{}: style is required (agent|raw)", path.display()),
+        Some("oneshot") => {
+            let template = raw.command.unwrap_or_else(|| vec![raw.binary.clone()]);
+            if !template.iter().any(|part| part == "{prompt}") {
+                bail!(
+                    "{}: oneshot command must contain a \"{{prompt}}\" argument",
+                    path.display()
+                );
+            }
+            LaunchStyle::OneShot { template }
+        }
+        Some(other) => bail!(
+            "{}: style must be agent|raw|oneshot, got {other}",
+            path.display()
+        ),
+        None => bail!("{}: style is required (agent|raw|oneshot)", path.display()),
     };
     Ok(HarnessSpec {
         name: name.to_string(),
@@ -283,8 +305,12 @@ mod tests {
         let dsh = registry.iter().find(|spec| spec.name == "dsh").unwrap();
         assert_eq!(
             dsh.launch,
-            LaunchStyle::Raw {
-                command: vec!["dsh".to_string(), "tui".to_string()]
+            LaunchStyle::OneShot {
+                template: vec![
+                    "dsh".to_string(),
+                    "headless".to_string(),
+                    "{prompt}".to_string()
+                ]
             }
         );
     }

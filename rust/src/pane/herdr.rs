@@ -48,6 +48,15 @@ impl HerdrBackend {
         self.json(&["agent", "get", name]).is_ok()
     }
 
+    /// herdr has no command-in-pane primitive; type the command into the fresh
+    /// shell so `run_command` semantics hold for split and tab alike.
+    fn run_command_in_pane(&self, pane: &PaneHandle, command: &Option<String>) {
+        if let Some(command) = command {
+            let _ = self.run(&["pane", "send-text", &pane.pane, command]);
+            let _ = self.run(&["pane", "send-keys", &pane.pane, "enter"]);
+        }
+    }
+
     fn pane_from_value(value: &Value) -> Result<PaneHandle> {
         let pane = value
             .get("result")
@@ -114,6 +123,10 @@ impl PaneBackend for HerdrBackend {
             return Ok(PaneHandle {
                 backend: "herdr".to_string(),
                 pane: pane.trim().to_string(),
+                workspace: pane
+                    .trim()
+                    .split_once(':')
+                    .map(|(workspace, _)| workspace.to_string()),
                 ..Default::default()
             });
         }
@@ -139,7 +152,9 @@ impl PaneBackend for HerdrBackend {
         }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let value = self.json(&refs)?;
-        Self::pane_from_value(&value)
+        let pane = Self::pane_from_value(&value)?;
+        self.run_command_in_pane(&pane, &options.command);
+        Ok(pane)
     }
 
     fn open_tab(&self, anchor: &PaneHandle, options: &SplitOptions) -> Result<PaneHandle> {
@@ -157,7 +172,9 @@ impl PaneBackend for HerdrBackend {
         }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let value = self.json(&refs)?;
-        Self::pane_from_value(&value)
+        let pane = Self::pane_from_value(&value)?;
+        self.run_command_in_pane(&pane, &options.command);
+        Ok(pane)
     }
 
     fn label(&self, pane: &PaneHandle, label: &str) -> Result<()> {

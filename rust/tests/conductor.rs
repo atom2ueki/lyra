@@ -1210,3 +1210,221 @@ fn worker_layout_controls_the_worker_surface() {
         assert!(labels.iter().all(|label| label.starts_with("lyra-")));
     }
 }
+
+#[test]
+fn mid_run_harness_loss_suspends_the_ticket_with_needs_input() {
+    let _guard = lock_env();
+    let dir = repo();
+    let store = dir.path().join(".lyra/store");
+    ensure_store(&store).unwrap();
+    let parent = create_ticket(
+        &store,
+        NewTicket {
+            project_id: "test-project".to_string(),
+            subject: "Parent".to_string(),
+            prompt: "Discover a blocker.".to_string(),
+            blocked_by: Vec::new(),
+            priority: 2,
+            labels: Vec::new(),
+            model_class: None,
+            acceptance: None,
+            plan: None,
+            parent: None,
+            origin: Some("test".to_string()),
+            harness: Some("omp".to_string()),
+        },
+    )
+    .unwrap();
+    let bin = dir.path().join("discover-omp.sh");
+    let script = r#"#!/bin/sh
+set -eu
+case "${1:-}" in
+  "--version") echo "fake-omp 1.0"; exit 0 ;;
+esac
+cfg="${LYRA_WORKER_CONFIG:?}"
+python3 - "$cfg" <<'PY'
+import json, os, sys, uuid
+cfg = json.load(open(sys.argv[1]))
+ch = cfg["channel"]
+os.makedirs(os.path.dirname(ch["state"]), exist_ok=True)
+request_id = str(uuid.uuid4())
+json.dump({"requestId": request_id, "kind": "blocker", "reason": "need helper", "subject": "Helper", "prompt": "Do helper"}, open(os.path.join(ch["requests"], request_id + ".json"), "w"))
+import time
+deadline = time.time() + 5
+response = None
+while time.time() < deadline:
+    path = os.path.join(ch["responses"], request_id + ".json")
+    if os.path.exists(path):
+        response = json.load(open(path)); break
+    time.sleep(0.05)
+result = {"schemaVersion": 1, "ticketId": cfg["ticketId"], "runId": cfg["runId"], "claimId": cfg["claimId"], "status": "blocked", "summary": "waiting", "verification": "", "evidence": [], "blockers": [response["ticketId"]], "finishedAt": "2026-01-01T00:00:00.000Z"}
+tmp = ch["result"] + ".tmp"
+json.dump(result, open(tmp, "w"))
+os.replace(tmp, ch["result"])
+PY
+"#;
+    fs::write(&bin, script).unwrap();
+    let mut perms = fs::metadata(&bin).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&bin, perms).unwrap();
+    unsafe { std::env::set_var("LYRA_OMP_BIN", &bin) };
+    let started = start_run(StartOptions {
+        repo: dir.path().to_path_buf(),
+        store: store.clone(),
+        project_id: "test-project".to_string(),
+        config: LyraConfig {
+            max_parallel: 2,
+            max_per_provider: HashMap::new(),
+            approval_posture: ApprovalPosture::Ask,
+            merge: MergeMode::Auto,
+            pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["omp".to_string()],
+        },
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        max_parallel: None,
+        max_seconds: Some(10),
+        ticket_ids: Vec::new(),
+        base_ref: None,
+        dry_run: false,
+        run_id: Some("run-harness-loss".to_string()),
+        model_policy: None,
+        models: Some(Vec::new()),
+        usage: Some(Vec::new()),
+    })
+    .unwrap();
+    let _ = started;
+
+    // The harness binary disappears mid-run: the discovered blocker ticket,
+    // which inherits the parent's harness, must suspend with needs_input
+    // instead of burning the launch-failure budget.
+    unsafe { std::env::set_var("LYRA_OMP_BIN", dir.path().join("gone-omp")) };
+    let state = monitor_run(MonitorOptions {
+        run_dir: run_dir_for(dir.path(), "run-harness-loss"),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        once: false,
+        interval_ms: 25,
+        timeout_ms: Some(15000),
+        max_parallel: None,
+    })
+    .unwrap();
+    let tickets = list_tickets(&store).unwrap();
+    let Some(blocker) = tickets
+        .iter()
+        .find(|ticket| ticket.parent.as_deref() == Some(parent.id.as_str()))
+    else {
+        panic!(
+            "no blocker ticket; tickets: {tickets:#?}; run tickets: {:#?}",
+            state.tickets.keys().collect::<Vec<_>>()
+        );
+    };
+    let suspension = blocker.suspension.as_ref().expect("suspended");
+    assert!(suspension.needs_input, "must surface as input");
+    assert!(
+        suspension.reason.contains("harness"),
+        "reason: {}",
+        suspension.reason
+    );
+    assert_eq!(state.status, RunStatus::Blocked);
+}
+
+#[test]
+fn oneshot_worker_reports_through_the_tee_log() {
+    let _guard = lock_env();
+    let dir = repo();
+    let _ = std::fs::remove_dir_all("/tmp/oneshot-debug");
+    let _ = std::fs::create_dir_all("/tmp/oneshot-debug");
+    std::fs::write("/tmp/oneshot-debug/marker", "keep").unwrap();
+    let store = dir.path().join(".lyra/store");
+    ensure_store(&store).unwrap();
+    let ticket = create_ticket(
+        &store,
+        NewTicket {
+            project_id: "test-project".to_string(),
+            subject: "One-shot".to_string(),
+            prompt: "Do the one-shot work.".to_string(),
+            blocked_by: Vec::new(),
+            priority: 2,
+            labels: Vec::new(),
+            model_class: None,
+            acceptance: None,
+            plan: None,
+            parent: None,
+            origin: Some("test".to_string()),
+            harness: Some("dsh".to_string()),
+        },
+    )
+    .unwrap();
+    let bin = dir.path().join("fake-dsh.sh");
+    let script = r#"#!/bin/sh
+set -eu
+case "$1" in
+  "--version") echo "fake-dsh 1.0"; exit 0 ;;
+esac
+echo "working via oneshot…"
+echo "---LYRA-RESULT---"
+echo "status: done"
+echo "summary: oneshot complete"
+echo "verification: none"
+echo "blockers:"
+"#;
+    fs::write(&bin, script).unwrap();
+    let mut perms = fs::metadata(&bin).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&bin, perms).unwrap();
+    unsafe { std::env::set_var("LYRA_DSH_BIN", &bin) };
+    start_run(StartOptions {
+        repo: dir.path().to_path_buf(),
+        store: store.clone(),
+        project_id: "test-project".to_string(),
+        config: LyraConfig {
+            max_parallel: 1,
+            max_per_provider: HashMap::new(),
+            approval_posture: ApprovalPosture::Ask,
+            merge: MergeMode::Auto,
+            pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["dsh".to_string()],
+        },
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        max_parallel: None,
+        max_seconds: Some(10),
+        ticket_ids: Vec::new(),
+        base_ref: None,
+        dry_run: false,
+        run_id: Some("run-oneshot".to_string()),
+        model_policy: None,
+        models: Some(Vec::new()),
+        usage: Some(Vec::new()),
+    })
+    .unwrap();
+    let state = monitor_run(MonitorOptions {
+        run_dir: run_dir_for(dir.path(), "run-oneshot"),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        once: false,
+        interval_ms: 25,
+        timeout_ms: Some(15000),
+        max_parallel: None,
+    })
+    .unwrap();
+    let run_dir = run_dir_for(dir.path(), "run-oneshot");
+    let _ = std::process::Command::new("cp")
+        .args(["-r", &run_dir.display().to_string(), "/tmp/oneshot-run"])
+        .status();
+    assert_eq!(
+        state.status,
+        RunStatus::Done,
+        "tickets: {:#?}",
+        state
+            .tickets
+            .values()
+            .map(|t| (t.status, t.phase.clone(), t.detail.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(state.tickets[&ticket.id].status, RunTicketStatus::Done);
+    let tickets = list_tickets(&store).unwrap();
+    assert_eq!(tickets[0].status, TicketStatus::Done);
+    let stdout_log = run_dir.join("workers").join(&ticket.id).join("stdout.log");
+    let text = fs::read_to_string(stdout_log).expect("tee captured stdout");
+    assert!(text.contains("---LYRA-RESULT---"));
+}

@@ -589,6 +589,43 @@ fn launch_ticket(
                 std::thread::sleep(std::time::Duration::from_secs(RAW_TUI_BOOT_SECS));
                 backend.send_text(pane.as_ref().unwrap(), &prompt, true)?;
             }
+            crate::harness::LaunchStyle::OneShot { ref template } => {
+                // One-shot CLI: the task rides on the command line, output
+                // streams through the pane via tee (visible) and lands in the
+                // channel (collectable) — the shell redirect bypasses the
+                // harness sandbox that cannot write to ~/.lyra.
+                let stdout_log = paths.root.join("stdout.log");
+                let oneshot_prompt = format!(
+                    "{prompt}\nFinally print a result block: a line with exactly ---LYRA-RESULT--- followed by lines status: done|blocked|failed|needs_input, summary: <what you did or need>, verification: <checks you ran>, blockers: <comma-separated ticket ids, blocked only>."
+                );
+                let mut argv: Vec<String> = template
+                    .iter()
+                    .map(|part| {
+                        if part == "{prompt}" {
+                            oneshot_prompt.clone()
+                        } else {
+                            part.clone()
+                        }
+                    })
+                    .collect();
+                if argv[0] == spec.binary {
+                    argv[0] = spec.resolve_binary();
+                }
+                let capabilities = backend.capabilities();
+                if !capabilities.splits || !capabilities.run_command {
+                    anyhow::bail!(
+                        "backend {} cannot run a oneshot {} worker",
+                        backend.name(),
+                        harness
+                    );
+                }
+                let inner = command_line(&argv[0], &argv[1..], &HashMap::new());
+                let command = format!(
+                    "({inner}) 2>&1 | tee {}",
+                    crate::shell::shell_quote(&stdout_log.display().to_string())
+                );
+                pane = Some(open_surface(Some(command), env)?);
+            }
         }
         let _ = &prompt;
         Ok(())
@@ -1243,6 +1280,7 @@ pub fn monitor_once(
     max_parallel: u32,
 ) -> Result<RunState> {
     let mut state = load_state(run_dir)?;
+    reconcile_claims(&mut state)?;
     let running: Vec<String> = state
         .tickets
         .iter()
@@ -1279,6 +1317,52 @@ pub fn monitor_once(
         save_state(&mut state)?;
     }
     Ok(state)
+}
+
+/// Crash recovery: a ticket the store shows as claimed by this run but that
+/// has no run-state entry (the launcher died between launch and save) is
+/// adopted so the normal settle path collects its result and finishes it.
+/// The pane handle is gone with the unsaved state; any visible pane must be
+/// closed by hand.
+fn reconcile_claims(state: &mut RunState) -> Result<()> {
+    let store_tickets = list_tickets(Path::new(&state.store))?;
+    let mut changed = false;
+    for ticket in &store_tickets {
+        if ticket.status != TicketStatus::InProgress {
+            continue;
+        }
+        let Some(execution) = &ticket.execution else {
+            continue;
+        };
+        if execution.run_id != state.run_id || state.tickets.contains_key(&ticket.id) {
+            continue;
+        }
+        eprintln!("lyra: adopting orphaned claim on {}", ticket.id);
+        state.tickets.insert(
+            ticket.id.clone(),
+            RunTicketState {
+                status: RunTicketStatus::Running,
+                claim_id: execution.claim_id.clone(),
+                pane: None,
+                worktree: String::new(),
+                branch: String::new(),
+                base_head: String::new(),
+                model: None,
+                phase: Some("adopted".to_string()),
+                detail: None,
+                started_at: now_iso(),
+                finished_at: None,
+                result: None,
+                error: None,
+                launch_failures: 0,
+            },
+        );
+        changed = true;
+    }
+    if changed {
+        save_state(state)?;
+    }
+    Ok(())
 }
 
 pub fn monitor_run(options: MonitorOptions) -> Result<RunState> {
