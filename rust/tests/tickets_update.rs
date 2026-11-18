@@ -21,7 +21,7 @@ fn batch(key: &str, blocked_by: Vec<&str>) -> BatchInput {
             acceptance: None,
             plan: None,
             parent: None,
-            harness: None,
+            harness: Some("omp".to_string()),
         }],
     }
 }

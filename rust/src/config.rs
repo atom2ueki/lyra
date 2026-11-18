@@ -67,6 +67,7 @@ pub struct LyraConfig {
     pub merge: MergeMode,
     pub pane_backend: Option<String>,
     pub worker_layout: WorkerLayout,
+    pub enabled_harnesses: Vec<String>,
 }
 #[derive(Debug, Deserialize)]
 struct RawConfig {
@@ -76,6 +77,7 @@ struct RawConfig {
     merge: Option<String>,
     pane_backend: Option<String>,
     worker_layout: Option<String>,
+    enabled_harnesses: Option<Vec<String>>,
 }
 
 impl Default for LyraConfig {
@@ -87,6 +89,7 @@ impl Default for LyraConfig {
             merge: MergeMode::Auto,
             pane_backend: None,
             worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: Vec::new(),
         }
     }
 }
@@ -169,10 +172,55 @@ pub fn load_config() -> Result<LyraConfig> {
         merge,
         pane_backend,
         worker_layout,
+        enabled_harnesses: raw.enabled_harnesses.unwrap_or_default(),
     })
 }
 
-pub const PANE_BACKENDS: [&str; 3] = ["herdr", "ghostty", "headless"];
+/// Persist the enabled-harness whitelist as one top-level array line,
+/// preserving comments and unknown keys.
+pub fn set_enabled_harnesses(names: &[String]) -> Result<PathBuf> {
+    let path = ensure_config()?;
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let rendered = names
+        .iter()
+        .map(|name| format!("\"{name}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let line = format!("enabled_harnesses = [{rendered}]");
+    let mut lines: Vec<String> = Vec::new();
+    let mut replaced = false;
+    let mut inserted = false;
+    for existing in text.lines() {
+        let trimmed = existing.trim_start();
+        if !inserted
+            && trimmed.starts_with('[')
+            && !replaced
+            && !text
+                .lines()
+                .any(|line| line.trim_start().starts_with("enabled_harnesses"))
+        {
+            lines.push(line.clone());
+            inserted = true;
+        }
+        if trimmed.starts_with("enabled_harnesses") {
+            lines.push(line.clone());
+            replaced = true;
+        } else {
+            lines.push(existing.to_string());
+        }
+    }
+    if !replaced && !inserted {
+        lines.push(line);
+    }
+    let mut updated = lines.join("\n");
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    fs::write(&path, &updated).with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
+pub const PANE_BACKENDS: [&str; 2] = ["herdr", "ghostty"];
 
 /// Persist the pane backend choice in the user config, preserving comments and
 /// unknown keys by upserting a single top-level line.

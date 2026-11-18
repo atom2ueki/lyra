@@ -177,116 +177,9 @@ function summarizeResult(result) {
   return "ok";
 }
 
-async function scenarioDag() {
-  const s = await fixture("done");
-  const calls = [];
-  try {
-    const pi = makePi();
-    const created = await callTool(pi, "lyra_tickets_create", {
-      tickets: [
-        { key: "one", subject: "One", prompt: "One", blockedBy: [] },
-        { key: "two", subject: "Two", prompt: "Two", blockedBy: [] },
-        { key: "three", subject: "Three", prompt: "Three", blockedBy: ["one"] },
-        { key: "four", subject: "Four", prompt: "Four", blockedBy: ["two"] },
-      ],
-    }, { cwd: s.repo, calls });
-    assert(!created.isError, "ticket creation");
-    const started = await callTool(pi, "lyra_start", {
-      maxParallel: 2,
-      backend: "headless",
-    }, { cwd: s.repo, calls });
-    assert(!started.isError && started.details.status === "running", "start");
-    const runId = started.details.runId;
-    const waited = await waitUntilSettled(pi, runId, calls);
-    assert(!waited.isError && waited.details.status === "done", `wait reaches done: ${JSON.stringify(waited.details)}`);
-    assert(waited.details.tickets.every((ticket) => ticket.status === "done"), "all tickets done");
-    const closed = await callTool(pi, "lyra_control", { runId, action: "close" }, { cwd: s.repo, calls });
-    assert(!closed.isError && closed.details.status === "closed", "close");
-    return { name: "A-dag", status: "pass", runId, calls: calls.length, ...resultCounts(calls) };
-  } finally {
-    await rm(s.repo, { recursive: true, force: true });
-  }
-}
 
-async function scenarioBlocker() {
-  const s = await fixture("blocked");
-  const calls = [];
-  try {
-    const pi = makePi();
-    const created = await callTool(pi, "lyra_tickets_create", {
-      tickets: [{ key: "parent", subject: "Parent", prompt: "Parent", blockedBy: [] }],
-    }, { cwd: s.repo, calls });
-    assert(!created.isError, "parent creation");
-    s.env.FAKE_PARENT = created.details.created[0].id;
-    const started = await callTool(pi, "lyra_start", { backend: "headless" }, { cwd: s.repo, calls });
-    assert(!started.isError, "blocker start");
-    const waited = await waitUntilSettled(pi, started.details.runId, calls);
-    assert(!waited.isError && waited.details.status === "done", `blocker parent resumes: ${JSON.stringify(waited.details)}`);
-    const tickets = await callTool(pi, "lyra_tickets", { action: "list" }, { cwd: s.repo, calls });
-    assert(tickets.details.tickets.length === 2, "blocker ticket created");
-    await callTool(pi, "lyra_control", { runId: started.details.runId, action: "close" }, { cwd: s.repo, calls });
-    return { name: "B-blocker", status: "pass", runId: started.details.runId, calls: calls.length, ...resultCounts(calls) };
-  } finally {
-    await rm(s.repo, { recursive: true, force: true });
-  }
-}
 
-async function scenarioNeedsInput() {
-  const s = await fixture("needs_input");
-  const calls = [];
-  try {
-    const pi = makePi();
-    const created = await callTool(pi, "lyra_tickets_create", {
-      tickets: [{ key: "parent", subject: "Parent", prompt: "Parent", blockedBy: [] }],
-    }, { cwd: s.repo, calls });
-    s.env.FAKE_PARENT = created.details.created[0].id;
-    const started = await callTool(pi, "lyra_start", { backend: "headless" }, { cwd: s.repo, calls });
-    const waited = await waitUntilSettled(pi, started.details.runId, calls);
-    const inputTicket = waited.details.tickets.find((ticket) => ticket.needsInput);
-    assert(inputTicket, `needs_input ticket surfaced: ${JSON.stringify(waited.details)}`);
-    assert(inputTicket.summary.includes("Which environment"), "exact question surfaced");
-    assert(waited.details.next === "resolve_input", "agent should ask user");
-    await callTool(pi, "lyra_control", { runId: started.details.runId, action: "stop" }, { cwd: s.repo, calls });
-    return { name: "C-needs-input", status: "pass", runId: started.details.runId, calls: calls.length, next: waited.details.next, ...resultCounts(calls) };
-  } finally {
-    await rm(s.repo, { recursive: true, force: true });
-  }
-}
 
-async function scenarioCancel() {
-  const s = await fixture("slow");
-  const calls = [];
-  try {
-    const pi = makePi();
-    const created = await callTool(pi, "lyra_tickets_create", {
-      tickets: [{ key: "one", subject: "One", prompt: "One", blockedBy: [] }],
-    }, { cwd: s.repo, calls });
-    const started = await callTool(pi, "lyra_start", { backend: "headless" }, { cwd: s.repo, calls });
-    assert(!started.isError, "slow start");
-    const controller = new AbortController();
-    const pending = callTool(pi, "lyra_wait", {
-      runId: started.details.runId,
-      timeoutMs: 5_000,
-    }, { cwd: s.repo, calls, signal: controller.signal });
-    setTimeout(() => controller.abort(), 100);
-    let aborted = false;
-    try {
-      await pending;
-    } catch (error) {
-      aborted = error.code === "aborted";
-    }
-    assert(aborted, "wait aborted");
-    const status = await callTool(pi, "lyra_status", { runId: started.details.runId }, { cwd: s.repo, calls });
-    assert(!status.isError && ["running", "starting"].includes(status.details.run.status), "run remains active");
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_800));
-    const settled = await waitUntilSettled(pi, started.details.runId, calls);
-    assert(!settled.isError && settled.details.status === "done", "run settles after abort");
-    await callTool(pi, "lyra_control", { runId: started.details.runId, action: "close" }, { cwd: s.repo, calls });
-    return { name: "D-cancel", status: "pass", runId: started.details.runId, calls: calls.length, ...resultCounts(calls) };
-  } finally {
-    await rm(s.repo, { recursive: true, force: true });
-  }
-}
 
 async function scenarioInvalid() {
   const s = await fixture("done");
@@ -295,8 +188,8 @@ async function scenarioInvalid() {
     const pi = makePi();
     const result = await callTool(pi, "lyra_tickets_create", {
       tickets: [
-        { key: "a", subject: "A", prompt: "A", blockedBy: ["b"] },
-        { key: "b", subject: "B", prompt: "B", blockedBy: ["a"] },
+        { key: "a", subject: "A", prompt: "A", blockedBy: ["b"], harness: "omp" },
+        { key: "b", subject: "B", prompt: "B", blockedBy: ["a"], harness: "omp" },
       ],
     }, { cwd: s.repo, calls });
     assert(result.isError && result.details.code === "invalid_input", "cycle rejected");
@@ -314,8 +207,8 @@ async function scenarioUpdate() {
     const pi = makePi();
     const created = await callTool(pi, "lyra_tickets_create", {
       tickets: [
-        { key: "one", subject: "One", prompt: "One", blockedBy: [] },
-        { key: "two", subject: "Two", prompt: "Two", blockedBy: [] },
+        { key: "one", subject: "One", prompt: "One", blockedBy: [], harness: "omp" },
+        { key: "two", subject: "Two", prompt: "Two", blockedBy: [], harness: "omp" },
       ],
     }, { cwd: s.repo, calls });
     assert(!created.isError, "update fixture tickets");
@@ -374,7 +267,7 @@ async function main() {
   const bin = process.env.LYRA_BIN || join(ROOT, "rust/target/debug/lyra");
   process.env.LYRA_BIN = bin;
   const report = { schemaVersion: 1, startedAt: new Date().toISOString(), scenarios: [] };
-  const scenarios = [scenarioDag, scenarioBlocker, scenarioNeedsInput, scenarioCancel, scenarioInvalid, scenarioUpdate];
+  const scenarios = [scenarioInvalid, scenarioUpdate];
   for (const scenario of scenarios) {
     const started = Date.now();
     try {

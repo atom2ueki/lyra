@@ -82,10 +82,10 @@ fn json(output: &Output) -> serde_json::Value {
 fn batch_input() -> &'static str {
     r#"{
       "tickets": [
-        {"key":"core","subject":"Core","prompt":"Build core","blockedBy":[],"acceptance":"Core works"},
-        {"key":"ui","subject":"UI","prompt":"Build UI","blockedBy":["core"]},
-        {"key":"docs","subject":"Docs","prompt":"Write docs","blockedBy":["core"]},
-        {"key":"release","subject":"Release","prompt":"Ship it","blockedBy":["ui","docs"]}
+        {"key":"core","subject":"Core","prompt":"Build core","blockedBy":[],"acceptance":"Core works","harness":"omp"},
+        {"key":"ui","subject":"UI","prompt":"Build UI","blockedBy":["core"],"harness":"omp"},
+        {"key":"docs","subject":"Docs","prompt":"Write docs","blockedBy":["core"],"harness":"omp"},
+        {"key":"release","subject":"Release","prompt":"Ship it","blockedBy":["ui","docs"],"harness":"omp"}
       ]
     }"#
 }
@@ -155,7 +155,7 @@ fn creates_a_batch_dag_and_reports_agent_status() {
         "--json",
         "--concise",
         "--backend",
-        "headless",
+        "ghostty",
         "--ticket",
         ui,
     ];
@@ -176,7 +176,7 @@ fn creates_a_batch_dag_and_reports_agent_status() {
             "--json",
             "--concise",
             "--backend",
-            "headless",
+            "ghostty",
         ],
         None,
     ));
@@ -263,9 +263,9 @@ fn start_selects_repeated_tickets_and_rejects_not_ready_ones() {
     let fixture = fixture();
     let batch = r#"{
       "tickets": [
-        {"key":"one","subject":"One","prompt":"One","blockedBy":[]},
-        {"key":"two","subject":"Two","prompt":"Two","blockedBy":[]},
-        {"key":"three","subject":"Three","prompt":"Three","blockedBy":[]}
+        {"key":"one","subject":"One","prompt":"One","blockedBy":[],"harness":"omp"},
+        {"key":"two","subject":"Two","prompt":"Two","blockedBy":[],"harness":"omp"},
+        {"key":"three","subject":"Three","prompt":"Three","blockedBy":[],"harness":"omp"}
       ]
     }"#;
     let created = json(&run(
@@ -287,7 +287,7 @@ fn start_selects_repeated_tickets_and_rejects_not_ready_ones() {
         "--json",
         "--concise",
         "--backend",
-        "headless",
+        "ghostty",
         "--ticket",
         ids[0],
         "--ticket",
@@ -306,7 +306,7 @@ fn start_selects_repeated_tickets_and_rejects_not_ready_ones() {
         "--json",
         "--concise",
         "--backend",
-        "headless",
+        "ghostty",
         "--tickets",
         comma_ids.as_str(),
     ];
@@ -338,7 +338,7 @@ fn start_selects_repeated_tickets_and_rejects_not_ready_ones() {
             "--json",
             "--concise",
             "--backend",
-            "headless",
+            "ghostty",
             "--ticket",
             "T-999",
         ],

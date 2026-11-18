@@ -114,6 +114,8 @@ pub struct RunState {
     pub approval: ApprovalPosture,
     #[serde(default)]
     pub worker_layout: WorkerLayout,
+    #[serde(default)]
+    pub enabled_harnesses: Vec<String>,
     pub backend: String,
     pub base_ref: String,
     pub created_at: String,
@@ -292,6 +294,10 @@ struct LaunchContext<'a> {
     models: &'a [ModelInfo],
     usage: &'a [UsageReport],
 }
+
+/// Seconds to wait for an unrecognized TUI to boot before injecting the task
+/// prompt. Crude, but raw workers are supervised by a human in the pane.
+pub const RAW_TUI_BOOT_SECS: u64 = 2;
 
 /// Open the surface a worker occupies: a sibling pane by default, a tab when
 /// the layout asks for one or when additional workers would fragment the
@@ -476,80 +482,25 @@ fn launch_ticket(
         });
         write_task_brief(&paths, &brief)?;
 
-        let harness = ticket.harness.clone().unwrap_or_else(|| "omp".to_string());
+        let harness = ticket
+            .harness
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("ticket {} has no harness", ticket.id))?;
+        let spec = crate::harness::resolve(&harness)?;
+        let prompt = format!(
+            "You are the Lyra worker for {}. Read {} and execute it in {}. When finished, write {} with exactly these fields:\nstatus: done|blocked|failed|needs_input\nsummary: <what you did or need>\nverification: <checks you ran>\nblockers: <comma-separated ticket ids, blocked only>\nDo not edit the ticket store or another worktree.",
+            ticket.id,
+            paths.prompt.display(),
+            tree.dir.display(),
+            paths.result_md.display()
+        );
         let mut env = HashMap::new();
         env.insert(
             "LYRA_WORKER_CONFIG".to_string(),
             paths.config.display().to_string(),
         );
-        if harness == "omp" {
-            let extension = ensure_worker_extension()?;
-            let args = omp_args(
-                &worker_config,
-                max_seconds,
-                roles_path.as_deref(),
-                &extension,
-            );
-            let capabilities = backend.capabilities();
-            if capabilities.start_agent {
-                pane = Some(open_worker_surface(
-                    backend,
-                    anchor,
-                    state.worker_layout,
-                    workers_running,
-                    &SplitOptions {
-                        direction: SplitDirection::Right,
-                        cwd: tree.dir.clone(),
-                        command: None,
-                        env,
-                        log_dir: Some(paths.logs.clone()),
-                    },
-                )?);
-                backend.start_agent(
-                    pane.as_ref().unwrap(),
-                    &StartAgentOptions {
-                        kind: "omp".to_string(),
-                        name: Some(worker_name.clone()),
-                        args,
-                    },
-                )?;
-            } else if capabilities.splits {
-                let command = command_line(
-                    std::env::var("LYRA_OMP_BIN")
-                        .unwrap_or_else(|_| "omp".to_string())
-                        .as_str(),
-                    &args,
-                    &HashMap::from([(
-                        "LYRA_WORKER_CONFIG".to_string(),
-                        paths.config.display().to_string(),
-                    )]),
-                );
-                pane = Some(open_worker_surface(
-                    backend,
-                    anchor,
-                    state.worker_layout,
-                    workers_running,
-                    &SplitOptions {
-                        direction: SplitDirection::Right,
-                        cwd: tree.dir.clone(),
-                        command: Some(command),
-                        env,
-                        log_dir: Some(paths.logs.clone()),
-                    },
-                )?);
-            } else {
-                anyhow::bail!("backend {} cannot create worker panes", backend.name());
-            }
-        } else {
-            let capabilities = backend.capabilities();
-            if !capabilities.start_agent || !capabilities.send_text {
-                anyhow::bail!(
-                    "backend {} cannot start a visible {} worker",
-                    backend.name(),
-                    harness
-                );
-            }
-            pane = Some(open_worker_surface(
+        let open_surface = |command: Option<String>, env: HashMap<String, String>| {
+            open_worker_surface(
                 backend,
                 anchor,
                 state.worker_layout,
@@ -557,28 +508,89 @@ fn launch_ticket(
                 &SplitOptions {
                     direction: SplitDirection::Right,
                     cwd: tree.dir.clone(),
-                    command: None,
+                    command,
                     env,
                     log_dir: Some(paths.logs.clone()),
                 },
-            )?);
-            backend.start_agent(
-                pane.as_ref().unwrap(),
-                &StartAgentOptions {
-                    kind: harness,
-                    name: Some(worker_name.clone()),
-                    args: Vec::new(),
-                },
-            )?;
-            let prompt = format!(
-                "You are the Lyra worker for {}. Read {} and execute it in {}. When finished, write {} with exactly these fields:\nstatus: done|blocked|failed|needs_input\nsummary: <what you did or need>\nverification: <checks you ran>\nblockers: <comma-separated ticket ids, blocked only>\nDo not edit the ticket store or another worktree.",
-                ticket.id,
-                paths.prompt.display(),
-                tree.dir.display(),
-                paths.result_md.display()
-            );
-            backend.send_text(pane.as_ref().unwrap(), &prompt, true)?;
+            )
+        };
+        match spec.launch {
+            crate::harness::LaunchStyle::Omp => {
+                let extension = ensure_worker_extension()?;
+                let args = omp_args(
+                    &worker_config,
+                    max_seconds,
+                    roles_path.as_deref(),
+                    &extension,
+                );
+                let capabilities = backend.capabilities();
+                if capabilities.start_agent {
+                    pane = Some(open_surface(None, env)?);
+                    backend.start_agent(
+                        pane.as_ref().unwrap(),
+                        &StartAgentOptions {
+                            kind: "omp".to_string(),
+                            name: Some(worker_name.clone()),
+                            args,
+                        },
+                    )?;
+                } else if capabilities.splits {
+                    let command = command_line(
+                        std::env::var("LYRA_OMP_BIN")
+                            .unwrap_or_else(|_| "omp".to_string())
+                            .as_str(),
+                        &args,
+                        &HashMap::from([(
+                            "LYRA_WORKER_CONFIG".to_string(),
+                            paths.config.display().to_string(),
+                        )]),
+                    );
+                    pane = Some(open_surface(Some(command), env)?);
+                } else {
+                    anyhow::bail!("backend {} cannot create worker panes", backend.name());
+                }
+            }
+            crate::harness::LaunchStyle::Agent { kind, args } => {
+                let capabilities = backend.capabilities();
+                if !capabilities.start_agent || !capabilities.send_text {
+                    anyhow::bail!(
+                        "backend {} cannot start a visible {} worker",
+                        backend.name(),
+                        harness
+                    );
+                }
+                pane = Some(open_surface(None, env)?);
+                backend.start_agent(
+                    pane.as_ref().unwrap(),
+                    &StartAgentOptions {
+                        kind,
+                        name: Some(worker_name.clone()),
+                        args,
+                    },
+                )?;
+                backend.send_text(pane.as_ref().unwrap(), &prompt, true)?;
+            }
+            crate::harness::LaunchStyle::Raw { command } => {
+                // A TUI herdr cannot recognize: open the pane, type the
+                // command, give the TUI a moment to boot, then inject the
+                // task prompt. Visible supervision replaces the agent state
+                // machine.
+                let capabilities = backend.capabilities();
+                if !capabilities.splits || !capabilities.send_text {
+                    anyhow::bail!(
+                        "backend {} cannot run a raw {} worker",
+                        backend.name(),
+                        harness
+                    );
+                }
+                let boot = command.join(" ");
+                pane = Some(open_surface(None, env)?);
+                backend.send_text(pane.as_ref().unwrap(), &boot, true)?;
+                std::thread::sleep(std::time::Duration::from_secs(RAW_TUI_BOOT_SECS));
+                backend.send_text(pane.as_ref().unwrap(), &prompt, true)?;
+            }
         }
+        let _ = &prompt;
         Ok(())
     })();
 
@@ -806,6 +818,7 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
         max_per_provider: options.config.max_per_provider.clone(),
         approval: options.config.approval_posture,
         worker_layout: options.config.worker_layout,
+        enabled_harnesses: options.config.enabled_harnesses.clone(),
         backend: backend.name().to_string(),
         base_ref: base_ref.clone(),
         created_at: now_iso(),
@@ -830,6 +843,21 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
         models: &model_catalog,
         usage: &usage,
     };
+    // Fail fast: every selected ticket's harness must be installed and
+    // enabled before a worktree or pane exists.
+    for ticket in &candidates {
+        let harness = ticket.harness.as_deref().unwrap_or_default();
+        if harness.is_empty() {
+            anyhow::bail!(
+                "ticket {} has no harness; set one with `lyra tickets update {} --harness <name>`",
+                ticket.id,
+                ticket.id
+            );
+        }
+        if let Err(error) = crate::harness::validate(harness, &options.config) {
+            anyhow::bail!("ticket {} cannot start: {error:#}", ticket.id);
+        }
+    }
     for ticket in candidates.into_iter().take(max_parallel as usize) {
         if let Err(error) = launch_ticket(
             &mut state,
@@ -911,7 +939,8 @@ fn process_requests(state: &RunState, ticket_id: &str) -> Result<()> {
                     plan: None,
                     parent: Some(ticket_id.to_string()),
                     origin: Some("discovered".to_string()),
-                    harness: None,
+                    harness: crate::store::read_ticket(Path::new(&state.store), ticket_id)?
+                        .and_then(|parent| parent.harness),
                 },
             )
         })();
@@ -1078,6 +1107,7 @@ fn launch_ready(state: &mut RunState, backend: &dyn PaneBackend, max_parallel: u
         merge: MergeMode::Auto,
         pane_backend: None,
         worker_layout: state.worker_layout,
+        enabled_harnesses: state.enabled_harnesses.clone(),
     };
     let ready: Vec<Ticket> = ready_tickets(&tickets)
         .into_iter()
@@ -1116,11 +1146,74 @@ fn launch_ready(state: &mut RunState, backend: &dyn PaneBackend, max_parallel: u
         usage: &usage,
     };
     for ticket in ready.into_iter().take(capacity as usize) {
+        if let Err(error) = preflight_harness(state, &ticket, &config) {
+            eprintln!("lyra: harness check {} failed: {error:#}", ticket.id);
+            continue;
+        }
         if let Err(error) = launch_ticket(state, &ticket, backend, &anchor, &launch_context) {
             eprintln!("lyra: launch {} failed: {error:#}", ticket.id);
         }
     }
     Ok(())
+}
+
+/// A harness that went missing mid-run (or a discovered ticket naming one that
+/// was never available) suspends the ticket with needs_input instead of
+/// burning the launch-failure budget: the orchestrator decides.
+fn preflight_harness(state: &mut RunState, ticket: &Ticket, config: &LyraConfig) -> Result<()> {
+    let harness = ticket.harness.as_deref().unwrap_or_default();
+    let error = if harness.is_empty() {
+        anyhow::anyhow!("ticket {} has no harness", ticket.id)
+    } else {
+        match crate::harness::validate(harness, config) {
+            Ok(_) => return Ok(()),
+            Err(error) => error,
+        }
+    };
+    let claim_id = Uuid::new_v4().to_string();
+    claim_ticket(
+        Path::new(&state.store),
+        &ticket.id,
+        &state.run_id,
+        &claim_id,
+    )?
+    .ok_or_else(|| anyhow::anyhow!("ticket {} is no longer claimable", ticket.id))?;
+    let _ = suspend_ticket(
+        Path::new(&state.store),
+        &ticket.id,
+        &state.run_id,
+        &claim_id,
+        SuspendArgs {
+            blockers: Vec::new(),
+            reason: format!("harness unavailable: {error:#}"),
+            needs_input: true,
+            worktree: String::new(),
+            branch: String::new(),
+            base_head: String::new(),
+        },
+    );
+    let now = now_iso();
+    state.tickets.insert(
+        ticket.id.clone(),
+        RunTicketState {
+            status: RunTicketStatus::Blocked,
+            claim_id,
+            pane: None,
+            worktree: String::new(),
+            branch: String::new(),
+            base_head: String::new(),
+            model: None,
+            phase: Some("blocked".to_string()),
+            detail: Some(format!("harness unavailable: {error:#}")),
+            started_at: now.clone(),
+            finished_at: Some(now),
+            result: None,
+            error: Some(format!("{error:#}")),
+            launch_failures: 0,
+        },
+    );
+    save_state(state)?;
+    Err(error)
 }
 
 fn run_has_active(state: &RunState) -> bool {
@@ -1336,6 +1429,7 @@ mod tests {
             max_per_provider: HashMap::new(),
             approval: ApprovalPosture::Ask,
             worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: Vec::new(),
             backend: "headless".to_string(),
             base_ref: "main".to_string(),
             created_at: now_iso(),

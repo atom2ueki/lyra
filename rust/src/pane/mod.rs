@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub mod ghostty;
-pub mod headless;
 pub mod herdr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,7 +134,6 @@ pub fn backend_by_name(name: &str) -> Result<Box<dyn PaneBackend>> {
     match name {
         "herdr" => Ok(Box::new(herdr::HerdrBackend::new())),
         "ghostty" => Ok(Box::new(ghostty::GhosttyBackend::new())),
-        "headless" => Ok(Box::new(headless::HeadlessBackend::new())),
         other => bail!("unknown pane backend: {other}"),
     }
 }
@@ -181,10 +179,10 @@ pub fn resolve_backend_with_env(
         });
     }
     if env.contains_key("TMUX") {
-        bail!("tmux backend is not implemented yet; use herdr, Ghostty, or headless");
+        bail!("tmux backend is not implemented yet; use herdr or Ghostty");
     }
     if env.contains_key("ZELLIJ") {
-        bail!("Zellij backend is not implemented yet; use herdr, Ghostty, or headless");
+        bail!("Zellij backend is not implemented yet; use herdr or Ghostty");
     }
     if env.get("TERM_PROGRAM").map(String::as_str) == Some("ghostty")
         || env.contains_key("GHOSTTY_TERMINAL_ID")
@@ -195,14 +193,11 @@ pub fn resolve_backend_with_env(
         });
     }
     if !stdout_is_tty {
-        return Ok(BackendChoice {
-            name: "headless".to_string(),
-            source: "detected",
-        });
+        bail!(
+            "no pane backend available (not a TTY): Lyra workers are always visible — run inside herdr or Ghostty"
+        );
     }
-    bail!(
-        "no pane backend detected; run `lyra setup` or set LYRA_PANE_BACKEND=herdr|ghostty|headless"
-    )
+    bail!("no pane backend detected; run `lyra setup` or set LYRA_PANE_BACKEND=herdr|ghostty")
 }
 
 pub fn resolve_backend() -> Result<BackendChoice> {

@@ -18,7 +18,9 @@ use lyra::conductor::{
     start_run,
 };
 use lyra::config::{ApprovalPosture, LyraConfig, MergeMode, WorkerLayout};
-use lyra::pane::headless::HeadlessBackend;
+mod common;
+
+use common::FakeSpawnBackend;
 use lyra::schema::TicketStatus;
 use lyra::store::{
     NewTicket, claim_ticket, create_ticket, ensure_store, list_tickets, suspend_ticket,
@@ -48,6 +50,7 @@ fn fake_omp(dir: &Path) -> PathBuf {
     let path = dir.join("fake-omp.sh");
     let script = r#"#!/bin/sh
 set -eu
+case "$1" in --version) echo "fake-omp 1.0"; exit 0;; esac
 cfg="${LYRA_WORKER_CONFIG:?}"
 python3 - "$cfg" <<'PY'
 import json, os, sys
@@ -112,13 +115,14 @@ fn conductor_runs_a_headless_omp_worker_and_closes() {
         merge: MergeMode::Auto,
         pane_backend: None,
         worker_layout: WorkerLayout::Auto,
+        enabled_harnesses: vec!["omp".to_string()],
     };
     let started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
         store: store.clone(),
         project_id: "test-project".to_string(),
         config,
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         max_parallel: None,
         max_seconds: Some(10),
         ticket_ids: Vec::new(),
@@ -138,7 +142,7 @@ fn conductor_runs_a_headless_omp_worker_and_closes() {
     let run_dir = run_dir_for(dir.path(), "run-test");
     let state = monitor_run(MonitorOptions {
         run_dir: run_dir.clone(),
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         once: false,
         interval_ms: 25,
         timeout_ms: Some(5000),
@@ -185,6 +189,7 @@ fn suspended_ticket_resumes_in_a_new_run() {
     let bin = dir.path().join("fake-omp.sh");
     let script = r#"#!/bin/sh
 set -eu
+case "$1" in --version) echo "fake-omp 1.0"; exit 0;; esac
 cfg="${LYRA_WORKER_CONFIG:?}"
 python3 - "$cfg" <<'PY'
 import json, os, sys
@@ -220,13 +225,14 @@ PY
         merge: MergeMode::Auto,
         pane_backend: None,
         worker_layout: WorkerLayout::Auto,
+        enabled_harnesses: vec!["omp".to_string()],
     };
     let _first = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
         store: store.clone(),
         project_id: "test-project".to_string(),
         config: config.clone(),
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         max_parallel: None,
         max_seconds: Some(10),
         ticket_ids: Vec::new(),
@@ -241,7 +247,7 @@ PY
     let first_run = run_dir_for(dir.path(), "run-first");
     let first_state = monitor_run(MonitorOptions {
         run_dir: first_run.clone(),
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         once: false,
         interval_ms: 25,
         timeout_ms: Some(5000),
@@ -265,7 +271,7 @@ PY
         store: store.clone(),
         project_id: "test-project".to_string(),
         config,
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         max_parallel: None,
         max_seconds: Some(10),
         ticket_ids: Vec::new(),
@@ -280,7 +286,7 @@ PY
     assert_eq!(second.tickets[&ticket.id].worktree, worktree);
     let second_state = monitor_run(MonitorOptions {
         run_dir: run_dir_for(dir.path(), "run-second"),
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         once: false,
         interval_ms: 25,
         timeout_ms: Some(5000),
@@ -349,13 +355,14 @@ fn conductor_schedules_a_four_ticket_dag_two_at_a_time() {
         merge: MergeMode::Auto,
         pane_backend: None,
         worker_layout: WorkerLayout::Auto,
+        enabled_harnesses: vec!["omp".to_string()],
     };
     let started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
         store: store.clone(),
         project_id: "test-project".to_string(),
         config,
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         max_parallel: Some(2),
         max_seconds: Some(10),
         ticket_ids: Vec::new(),
@@ -377,7 +384,7 @@ fn conductor_schedules_a_four_ticket_dag_two_at_a_time() {
     assert!(!started.tickets.contains_key(&ids[3]));
     let state = monitor_run(MonitorOptions {
         run_dir: run_dir_for(dir.path(), "run-dag"),
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         once: false,
         interval_ms: 25,
         timeout_ms: Some(5000),
@@ -445,8 +452,9 @@ fn conductor_applies_model_policy_and_writes_worker_roles() {
             merge: MergeMode::Auto,
             pane_backend: None,
             worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["omp".to_string()],
         },
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         max_parallel: None,
         max_seconds: Some(10),
         ticket_ids: Vec::new(),
@@ -499,6 +507,7 @@ fn discovered_blocker_runs_and_parent_resumes() {
     let script = format!(
         r#"#!/bin/sh
 set -eu
+case "$1" in --version) echo "fake-omp 1.0"; exit 0;; esac
 cfg="${{LYRA_WORKER_CONFIG:?}}"
 python3 - "$cfg" <<'PY'
 import json, os, sys, time, uuid
@@ -542,13 +551,14 @@ PY
         merge: MergeMode::Auto,
         pane_backend: None,
         worker_layout: WorkerLayout::Auto,
+        enabled_harnesses: vec!["omp".to_string()],
     };
     let _started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
         store: store.clone(),
         project_id: "test-project".to_string(),
         config,
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         max_parallel: Some(2),
         max_seconds: Some(10),
         ticket_ids: Vec::new(),
@@ -562,7 +572,7 @@ PY
     .unwrap();
     let state = monitor_run(MonitorOptions {
         run_dir: run_dir_for(dir.path(), "run-discovery"),
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         once: false,
         interval_ms: 25,
         timeout_ms: Some(30000),
@@ -653,8 +663,9 @@ fn provider_cap_overflows_to_the_next_candidate() {
             merge: MergeMode::Auto,
             pane_backend: None,
             worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["omp".to_string()],
         },
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         max_parallel: Some(4),
         max_seconds: Some(10),
         ticket_ids: Vec::new(),
@@ -803,6 +814,7 @@ fn non_omp_harness_uses_result_md_fallback() {
         },
     )
     .unwrap();
+    unsafe { std::env::set_var("LYRA_CODEX_BIN", "/bin/echo") };
     let backend = RecordingBackend::default();
     let started = start_run(StartOptions {
         repo: dir.path().to_path_buf(),
@@ -815,6 +827,7 @@ fn non_omp_harness_uses_result_md_fallback() {
             merge: MergeMode::Auto,
             pane_backend: None,
             worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["omp".to_string(), "codex".to_string()],
         },
         backend: Some(Box::new(backend)),
         max_parallel: None,
@@ -831,7 +844,7 @@ fn non_omp_harness_uses_result_md_fallback() {
     assert_eq!(started.tickets[&ticket.id].status, RunTicketStatus::Running);
     let state = monitor_run(MonitorOptions {
         run_dir: run_dir_for(dir.path(), "run-cross-agent"),
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         once: false,
         interval_ms: 25,
         timeout_ms: Some(5000),
@@ -922,6 +935,7 @@ fn failed_launch_releases_the_worktree_and_branch() {
             merge: MergeMode::Auto,
             pane_backend: None,
             worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["omp".to_string()],
         },
         backend: Some(Box::new(FailingStartBackend)),
         max_parallel: None,
@@ -988,6 +1002,7 @@ fn launch_failures_are_capped_and_the_ticket_fails() {
             merge: MergeMode::Auto,
             pane_backend: None,
             worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["omp".to_string()],
         },
         backend: Some(Box::new(FailingStartBackend)),
         max_parallel: None,
@@ -1085,8 +1100,9 @@ fn capped_resume_failures_keep_the_checkpoint_and_ask_for_input() {
             merge: MergeMode::Auto,
             pane_backend: None,
             worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["omp".to_string()],
         },
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         max_parallel: None,
         max_seconds: Some(10),
         ticket_ids: Vec::new(),
@@ -1100,7 +1116,7 @@ fn capped_resume_failures_keep_the_checkpoint_and_ask_for_input() {
     .unwrap();
     let state = monitor_run(MonitorOptions {
         run_dir: run_dir_for(dir.path(), "run-resume-cap"),
-        backend: Some(Box::new(HeadlessBackend::new())),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
         once: false,
         interval_ms: 10,
         timeout_ms: Some(10000),
@@ -1174,6 +1190,7 @@ fn worker_layout_controls_the_worker_surface() {
                 merge: MergeMode::Auto,
                 pane_backend: None,
                 worker_layout: layout,
+                enabled_harnesses: vec!["omp".to_string()],
             },
             backend: Some(Box::new(backend)),
             max_parallel: Some(2),

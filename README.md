@@ -19,10 +19,15 @@ Implemented:
 - Lyra ticket schema v1 + local store + DAG validation
 - `omp-kanban` import adapter
 - `lyra init` / `setup` / `import` / `status` / `graph` / `models` / `doctor`
-- `PaneBackend`: herdr, Ghostty, headless — chosen by `LYRA_PANE_BACKEND`, then the
+- `PaneBackend`: herdr, Ghostty — chosen by `LYRA_PANE_BACKEND`, then the
   `pane_backend` key in `config.toml` (written by `lyra setup`), then terminal detection.
-  New terminals are added as `PaneBackend` implementations; there is no runtime plugin
-  system by design.
+  There is no invisible-worker backend: Lyra manages visible workers only; a harness's
+  own internal headless behavior is its business. New terminals are added as
+  `PaneBackend` implementations; there is no runtime plugin system by design.
+- Harness registry: built-in templates (omp, dsh, claude, codex, gemini, opencode, kimi,
+  qwen) plus user templates in `~/.lyra/harnesses.d/<name>.toml` that shadow built-ins.
+  `enabled_harnesses` in `config.toml` is the whitelist; tickets must name a harness;
+  `lyra setup` probes, offers enabling (with a live smoke test), and persists it.
 - `worker_layout = pane|tab|auto` in `config.toml`: where workers appear. `auto` (default)
   puts the first worker in a sibling pane of the orchestrator and each additional worker
   in its own tab; every worker surface is labeled `lyra-<ticket>`.
@@ -81,11 +86,13 @@ lyra logs QuietHarbor
 lyra close
 ```
 
-`LYRA_HOME` overrides `~/.lyra`. Run `lyra setup` once per machine: it verifies omp/git,
-resolves the pane backend, and persists it as `pane_backend` in `~/.lyra/config.toml`
-(herdr and Ghostty give visible workers; headless runs them invisibly).
-`LYRA_PANE_BACKEND=herdr|ghostty|headless` overrides config for one invocation;
-`LYRA_OMP_BIN` overrides the `omp` binary for tests.
+`LYRA_HOME` overrides `~/.lyra`. Run `lyra setup` once per machine: it verifies git,
+probes the harness inventory, resolves the pane backend, and persists `pane_backend`
+and `enabled_harnesses` in `~/.lyra/config.toml`. `lyra setup` on a TTY runs a wizard
+(enable harnesses, each with a smoke test in a real pane). Workers are always visible;
+running without a terminal is an error. `LYRA_PANE_BACKEND=herdr|ghostty` overrides the
+configured backend for one invocation; `LYRA_OMP_BIN` / `LYRA_<NAME>_BIN` override
+harness binaries for tests.
 
 Roles: the **orchestrator** (the human plus the lead agent session) owns the ticket
 store — only it creates and updates tickets. The **conductor** is the Lyra run engine
@@ -99,8 +106,9 @@ imported stores remain valid.
 ## Worker contract
 
 Each worker gets a worktree, a `TASK.md` brief, a claim-scoped file channel, and a generated
-`roles.yml` for OMP subagent routing. Workers report through the extension; non-OMP harnesses use
-`RESULT.md` with these fields:
+`roles.yml` for OMP subagent routing. Workers report through the extension; non-OMP harnesses
+(herdr-recognized agents via `agent start --kind`, unrecognized TUIs such as `dsh tui` via a
+raw pane) use `RESULT.md` with these fields:
 
 ```text
 status: done|blocked|failed|needs_input

@@ -12,7 +12,9 @@ use crate::conductor::{
     MonitorOptions, RunState, StartOptions, WaitOptions, WaitOutcome, close_run, latest_run_dir,
     load_state, monitor_run, run_dir_for, start_run, stop_run, wait_run,
 };
-use crate::config::{ensure_config, load_config, lyra_home, set_pane_backend};
+use crate::config::{
+    ensure_config, load_config, lyra_home, set_enabled_harnesses, set_pane_backend,
+};
 use crate::graph::{to_dot, to_json, to_mermaid};
 use crate::import::import_omp_kanban;
 use crate::models::{
@@ -20,8 +22,7 @@ use crate::models::{
     model_policy_path, select_model,
 };
 use crate::pane::{
-    PaneBackend, ghostty::GhosttyBackend, headless::HeadlessBackend, herdr::HerdrBackend,
-    resolve_backend, select_backend,
+    PaneBackend, ghostty::GhosttyBackend, herdr::HerdrBackend, resolve_backend, select_backend,
 };
 use crate::project::{current_project, project_id_for, store_dir_for};
 use crate::schema::{
@@ -76,6 +77,8 @@ enum Command {
     },
     Add {
         idea: String,
+        #[arg(long)]
+        harness: Option<String>,
         #[arg(long)]
         store: Option<PathBuf>,
         #[arg(long = "project-id")]
@@ -248,14 +251,12 @@ enum ConductCommand {
 enum PaneBackendKind {
     Herdr,
     Ghostty,
-    Headless,
 }
 
 fn pane_backend(kind: Option<PaneBackendKind>) -> Result<Box<dyn PaneBackend>> {
     match kind {
         Some(PaneBackendKind::Herdr) => Ok(Box::new(HerdrBackend::new())),
         Some(PaneBackendKind::Ghostty) => Ok(Box::new(GhosttyBackend::new())),
-        Some(PaneBackendKind::Headless) => Ok(Box::new(HeadlessBackend::new())),
         None => select_backend(),
     }
 }
@@ -406,6 +407,8 @@ enum TicketsCommand {
         labels: Vec<String>,
         #[arg(long = "clear-labels", conflicts_with = "labels")]
         clear_labels: bool,
+        #[arg(long)]
+        harness: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -593,13 +596,61 @@ fn run_doctor() -> Result<i32> {
         }
     };
 
-    let omp_bin = std::env::var("LYRA_OMP_BIN")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "omp".to_string());
-    check("omp", command_version(&omp_bin, &["--version"]));
     check("git", command_version("git", &["--version"]));
     check("gh", command_version("gh", &["--version"]));
+    // Harness inventory: enabled-but-missing fails; installed-but-off is a
+    // skip; a store ticket naming an unusable harness fails.
+    let inventory = match load_config().and_then(|config| crate::harness::inventory(&config)) {
+        Ok(inventory) => inventory,
+        Err(error) => {
+            check("harnesses", Err(error));
+            Vec::new()
+        }
+    };
+    for status in inventory {
+        if !status.installed && !status.enabled {
+            continue;
+        }
+        match (status.installed, status.enabled) {
+            (true, true) => check(
+                &format!("harness {}", status.name),
+                Ok(status.version.clone().unwrap_or_default()),
+            ),
+            (false, true) => check(
+                &format!("harness {}", status.name),
+                Err(anyhow::anyhow!("enabled but not installed")),
+            ),
+            _ => println!("SKIP  harness {}  installed, not enabled", status.name),
+        }
+    }
+    let store_check = current_project().and_then(|(_, _, store)| {
+        let tickets = list_tickets(&store)?;
+        let inventory = crate::harness::inventory(&load_config()?)?;
+        let mut problems = Vec::new();
+        for ticket in &tickets {
+            // Done tickets are immutable history; they never launch again.
+            if ticket.status == crate::schema::TicketStatus::Done {
+                continue;
+            }
+            let Some(harness) = ticket.harness.as_deref() else {
+                problems.push(format!("{}: no harness", ticket.id));
+                continue;
+            };
+            match inventory.iter().find(|status| status.name == harness) {
+                None => problems.push(format!("{}: unknown harness {harness}", ticket.id)),
+                Some(status) if !status.installed || !status.enabled => {
+                    problems.push(format!("{}: harness {harness} unusable", ticket.id));
+                }
+                _ => {}
+            }
+        }
+        if problems.is_empty() {
+            Ok(format!("{} ticket(s) harnesses ok", tickets.len()))
+        } else {
+            anyhow::bail!("{}", problems.join("; "))
+        }
+    });
+    check("ticket harnesses", store_check);
     check(
         "config",
         load_config().map(|config| {
@@ -650,7 +701,7 @@ fn run_doctor() -> Result<i32> {
         Ok(if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
             "interactive".to_string()
         } else {
-            "not a TTY (headless backend available)".to_string()
+            "no pane backend (run inside herdr or Ghostty for visible workers)".to_string()
         }),
     );
     check(
@@ -679,20 +730,56 @@ fn run_setup() -> Result<i32> {
     ensure_store(&store)?;
     let extension = ensure_worker_extension()?;
 
-    let omp_bin = std::env::var("LYRA_OMP_BIN")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "omp".to_string());
-    let omp = command_version(&omp_bin, &["--version"]).map_err(|error| {
-        anyhow::anyhow!("lyra needs the omp agent CLI on PATH (or LYRA_OMP_BIN): {error:#}")
-    })?;
     let git = command_version("git", &["--version"])?;
-
-    let choice = resolve_backend()?;
+    let choice = resolve_backend().ok();
     let mut persisted = false;
-    if load_config()?.pane_backend.is_none() && std::env::var("LYRA_PANE_BACKEND").is_err() {
+    if let Some(choice) = &choice
+        && load_config()?.pane_backend.is_none()
+        && std::env::var("LYRA_PANE_BACKEND").is_err()
+    {
         set_pane_backend(&choice.name)?;
         persisted = true;
+    }
+
+    // Harness inventory: facts probed live, the enabled whitelist is the only
+    // thing persisted. The wizard is interactive on a TTY only.
+    let mut config = load_config()?;
+    let inventory = crate::harness::inventory(&config)?;
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stdout());
+    if interactive && let Some(backend) = select_backend().ok() {
+        for status in &inventory {
+            if !status.installed || status.enabled {
+                continue;
+            }
+            print!(
+                "Enable {} ({})? [y/N] ",
+                status.name,
+                status.version.as_deref().unwrap_or("?")
+            );
+            use std::io::Write;
+            std::io::stdout().flush()?;
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer)?;
+            if !answer.trim().eq_ignore_ascii_case("y") {
+                continue;
+            }
+            let spec = crate::harness::resolve(&status.name)?;
+            print!("  smoke test (opens a pane, ~1 min)… ");
+            std::io::stdout().flush()?;
+            match smoke_harness(backend.as_ref(), &spec) {
+                Ok(true) => {
+                    println!("ok");
+                    config.enabled_harnesses.push(spec.name);
+                }
+                Ok(false) => println!("no READY within timeout; not enabled"),
+                Err(error) => println!("failed: {error:#}"),
+            }
+        }
+        if !config.enabled_harnesses.is_empty() {
+            set_enabled_harnesses(&config.enabled_harnesses)?;
+        }
+        config = load_config()?;
     }
 
     println!("Config:          {}", config_path.display());
@@ -700,35 +787,111 @@ fn run_setup() -> Result<i32> {
     println!("Worker extension: {}", extension.display());
     println!("Project:         {project_id} ({})", root.display());
     println!("Store:           {}", store.display());
-    println!("omp:             {omp}");
     println!("git:             {git}");
-    println!(
-        "Pane backend:    {} ({}){}",
-        choice.name,
-        choice.source,
-        if persisted {
-            " — saved to config"
-        } else {
-            ""
+    match &choice {
+        Some(choice) => println!(
+            "Pane backend:    {} ({}){}",
+            choice.name,
+            choice.source,
+            if persisted {
+                " — saved to config"
+            } else {
+                ""
+            }
+        ),
+        None => println!(
+            "Pane backend:    none detected (run lyra setup inside herdr or Ghostty to pick one)"
+        ),
+    }
+    println!("Harnesses (installed/enabled):");
+    for status in crate::harness::inventory(&config)? {
+        if !status.installed && !status.enabled {
+            continue;
         }
-    );
-    if choice.name == "ghostty" {
         println!(
-            "note: the ghostty backend drives Ghostty via AppleScript (macOS only) and needs the calling window focused for anchoring"
+            "  {:<10} {} {}",
+            status.name,
+            status.version.as_deref().unwrap_or("(probe failed)"),
+            if status.enabled {
+                "[enabled]"
+            } else {
+                "[not enabled]"
+            }
         );
     }
-    if choice.name == "headless" {
-        println!(
-            "note: the headless backend runs workers without visible panes; run setup inside herdr or Ghostty for visible workers"
-        );
+    if !interactive && config.enabled_harnesses.is_empty() {
+        println!("note: no harnesses enabled; run `lyra setup` in a terminal to use the wizard");
     }
-    let gh = command_version("gh", &["--version"])
-        .unwrap_or_else(|_| "not found (optional)".to_string());
-    println!("gh:              {gh}");
     println!(
         "\nSetup complete. Run `lyra doctor` for full checks, then `lyra add` + `lyra conduct start`."
     );
     Ok(0)
+}
+
+/// Launch a harness in a throwaway pane with a trivial prompt and wait for the
+/// word READY. Always closes the pane.
+fn smoke_harness(backend: &dyn PaneBackend, spec: &crate::harness::HarnessSpec) -> Result<bool> {
+    let anchor = backend.anchor()?;
+    let pane = backend.split(
+        &anchor,
+        &crate::pane::SplitOptions {
+            direction: crate::pane::SplitDirection::Right,
+            cwd: std::env::current_dir()?,
+            command: None,
+            env: HashMap::new(),
+            log_dir: None,
+        },
+    )?;
+    let result = (|| -> Result<bool> {
+        let prompt = "This is a lyra setup smoke test. Reply with the single word READY and stop.";
+        match &spec.launch {
+            crate::harness::LaunchStyle::Omp => {
+                let argv = vec![
+                    "--approval-mode".to_string(),
+                    "yolo".to_string(),
+                    prompt.to_string(),
+                ];
+                backend.start_agent(
+                    &pane,
+                    &crate::pane::StartAgentOptions {
+                        kind: "omp".to_string(),
+                        name: Some("lyra-smoke".to_string()),
+                        args: argv,
+                    },
+                )?;
+            }
+            crate::harness::LaunchStyle::Agent { kind, args } => {
+                backend.start_agent(
+                    &pane,
+                    &crate::pane::StartAgentOptions {
+                        kind: kind.clone(),
+                        name: Some("lyra-smoke".to_string()),
+                        args: args.clone(),
+                    },
+                )?;
+                backend.send_text(&pane, prompt, true)?;
+            }
+            crate::harness::LaunchStyle::Raw { command } => {
+                backend.send_text(&pane, &command.join(" "), true)?;
+                std::thread::sleep(std::time::Duration::from_secs(
+                    crate::conductor::RAW_TUI_BOOT_SECS,
+                ));
+                backend.send_text(&pane, prompt, true)?;
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if let Ok(text) = backend.read(&pane, "recent-unwrapped", 40)
+                && text.contains("READY")
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })();
+    let _ = backend.close(&pane);
+    result
 }
 
 pub fn run() -> Result<()> {
@@ -1040,9 +1203,11 @@ pub fn run() -> Result<()> {
         }
         Some(Command::Add {
             idea,
+            harness,
             store,
             project_id,
         }) => {
+            let harness = require_harness(harness.as_deref())?;
             let context = resolve_store(store, project_id)?;
             ensure_store(&context.store)?;
             let ticket = create_ticket(
@@ -1059,7 +1224,7 @@ pub fn run() -> Result<()> {
                     plan: None,
                     parent: None,
                     origin: Some("inbox".to_string()),
-                    harness: None,
+                    harness: Some(harness),
                 },
             )?;
             println!("{}  {}", ticket.id, ticket.subject);
@@ -1188,6 +1353,7 @@ Plan:
                 clear_blocked_by,
                 labels,
                 clear_labels,
+                harness,
                 json,
             } => {
                 let context = resolve_store(store, None)?;
@@ -1201,6 +1367,7 @@ Plan:
                     clear_blocked_by,
                     labels,
                     clear_labels,
+                    harness,
                 };
                 let ticket = update_ticket(&context.store, &id, update)?;
                 if json {
@@ -1245,4 +1412,20 @@ Plan:
         }
     }
     Ok(())
+}
+
+fn require_harness(harness: Option<&str>) -> Result<String> {
+    if let Some(name) = harness {
+        return Ok(name.to_string());
+    }
+    let config = load_config()?;
+    let available = crate::harness::available(&config)?;
+    anyhow::bail!(
+        "--harness is required; available: {}",
+        if available.is_empty() {
+            "none — run `lyra setup`".to_string()
+        } else {
+            available.join(", ")
+        }
+    );
 }

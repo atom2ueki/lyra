@@ -1,250 +1,183 @@
-use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-use std::thread::sleep;
-use std::time::Duration;
+//! `wait_run` semantics: revision-gated returns and timeout-without-stop.
+//! Run-level coverage lives here at library level (Q20: the binary ships no
+//! invisible-worker backend; runs are driven with the fake spawn backend).
 
-struct Fixture {
-    repo: tempfile::TempDir,
-    home: PathBuf,
-    bin: PathBuf,
+mod common;
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::Command;
+use std::sync::Mutex;
+
+use common::FakeSpawnBackend;
+use lyra::conductor::{RunStatus, StartOptions, WaitOptions, run_dir_for, start_run, wait_run};
+use lyra::config::{ApprovalPosture, LyraConfig, MergeMode, WorkerLayout};
+use lyra::store::{NewTicket, create_ticket, ensure_store};
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn git(repo: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?} failed");
 }
 
-fn fixture() -> Fixture {
-    let repo = tempfile::tempdir().unwrap();
-    let git = |args: &[&str]| {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(repo.path())
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?}");
-    };
-    git(&["init", "-q"]);
-    git(&["config", "user.email", "test@example.com"]);
-    git(&["config", "user.name", "Test"]);
-    fs::write(repo.path().join("README.md"), "test\n").unwrap();
-    git(&["add", "README.md"]);
-    git(&["commit", "-qm", "init"]);
-    let home = repo.path().join(".home");
-    fs::create_dir_all(&home).unwrap();
-    let bin = repo.path().join("fake-omp.sh");
-    let script = r#"#!/bin/sh
+fn repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-q"]);
+    git(dir.path(), &["config", "user.email", "test@example.com"]);
+    git(dir.path(), &["config", "user.name", "Test"]);
+    fs::write(dir.path().join("README.md"), "# test\n").unwrap();
+    git(dir.path(), &["add", "README.md"]);
+    git(dir.path(), &["commit", "-qm", "init"]);
+    dir
+}
+
+fn slow_omp(dir: &Path, sleep_secs: f64) -> std::path::PathBuf {
+    let path = dir.join(format!("fake-omp-{sleep_secs}.sh"));
+    let script = format!(
+        r#"#!/bin/sh
 set -eu
-case "${1:-}" in
-  models) printf '{"models":[]}\n'; exit 0 ;;
-  usage) printf '{"providers":[]}\n'; exit 0 ;;
-esac
-cfg="${LYRA_WORKER_CONFIG:?}"
+case "${{1:-}}" in --version) echo "fake-omp 1.0"; exit 0 ;; esac
+cfg="${{LYRA_WORKER_CONFIG:?}}"
 python3 - "$cfg" <<'PY'
 import json, os, sys, time
 cfg = json.load(open(sys.argv[1]))
 ch = cfg["channel"]
 os.makedirs(os.path.dirname(ch["state"]), exist_ok=True)
-time.sleep(1.0)
-result = {
+time.sleep({sleep_secs})
+result = {{
     "schemaVersion": 1, "ticketId": cfg["ticketId"], "runId": cfg["runId"],
     "claimId": cfg["claimId"], "status": "done", "summary": "slow done",
     "verification": "ok", "evidence": [], "blockers": [],
     "finishedAt": "2026-01-01T00:00:00.000Z",
-}
+}}
 tmp = ch["result"] + ".tmp"
 json.dump(result, open(tmp, "w"))
 os.replace(tmp, ch["result"])
 PY
-"#;
-    fs::write(&bin, script).unwrap();
-    let mut perms = fs::metadata(&bin).unwrap().permissions();
+"#
+    );
+    fs::write(&path, script).unwrap();
+    let mut perms = fs::metadata(&path).unwrap().permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&bin, perms).unwrap();
-    Fixture { repo, home, bin }
+    fs::set_permissions(&path, perms).unwrap();
+    path
 }
 
-fn run(fixture: &Fixture, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_lyra"))
-        .args(args)
-        .current_dir(fixture.repo.path())
-        .env("LYRA_HOME", &fixture.home)
-        .env("LYRA_OMP_BIN", &fixture.bin)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .unwrap()
+fn start_slow_run(repo: &Path, store: &Path, sleep_secs: f64, run_id: &str) {
+    create_ticket(
+        store,
+        NewTicket {
+            project_id: "test-project".to_string(),
+            subject: "Slow worker".to_string(),
+            prompt: "Do it slowly.".to_string(),
+            blocked_by: Vec::new(),
+            priority: 2,
+            labels: Vec::new(),
+            model_class: None,
+            acceptance: None,
+            plan: None,
+            parent: None,
+            origin: Some("test".to_string()),
+            harness: Some("omp".to_string()),
+        },
+    )
+    .unwrap();
+    unsafe { std::env::set_var("LYRA_OMP_BIN", slow_omp(repo, sleep_secs)) };
+    let state = start_run(StartOptions {
+        repo: repo.to_path_buf(),
+        store: store.to_path_buf(),
+        project_id: "test-project".to_string(),
+        config: LyraConfig {
+            max_parallel: 1,
+            max_per_provider: Default::default(),
+            approval_posture: ApprovalPosture::Ask,
+            merge: MergeMode::Auto,
+            pane_backend: None,
+            worker_layout: WorkerLayout::Auto,
+            enabled_harnesses: vec!["omp".to_string()],
+        },
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        max_parallel: None,
+        max_seconds: Some(30),
+        ticket_ids: Vec::new(),
+        base_ref: None,
+        dry_run: false,
+        run_id: Some(run_id.to_string()),
+        model_policy: None,
+        models: Some(Vec::new()),
+        usage: Some(Vec::new()),
+    })
+    .unwrap();
+    assert_eq!(state.status, RunStatus::Running);
 }
 
-fn okay_json(output: &Output) -> serde_json::Value {
-    assert!(
-        output.status.success(),
-        "command failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).unwrap()
-}
+#[test]
+fn wait_returns_once_the_revision_advances() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = repo();
+    let store = dir.path().join(".lyra/store");
+    ensure_store(&store).unwrap();
+    start_slow_run(dir.path(), &store, 1.0, "run-wait-advance");
+    let run_dir = run_dir_for(dir.path(), "run-wait-advance");
 
-fn start(fixture: &Fixture) -> serde_json::Value {
-    let init = run(fixture, &["init"]);
-    assert!(
-        init.status.success(),
-        "{}",
-        String::from_utf8_lossy(&init.stderr)
-    );
-    let add = run(fixture, &["add", "Slow worker"]);
-    assert!(
-        add.status.success(),
-        "{}",
-        String::from_utf8_lossy(&add.stderr)
-    );
-    okay_json(&run(
-        fixture,
-        &[
-            "conduct",
-            "start",
-            "--backend",
-            "headless",
-            "--run-id",
-            "run-wait",
-            "--json",
-            "--concise",
-        ],
-    ))
+    let outcome = wait_run(WaitOptions {
+        run_dir: run_dir.clone(),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        after_revision: Some(1),
+        timeout_ms: 5000,
+        interval_ms: 25,
+        max_parallel: None,
+    })
+    .unwrap();
+    assert!(!outcome.timed_out);
+    assert!(outcome.state.revision > 1);
+    let settled = wait_run(WaitOptions {
+        run_dir,
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        after_revision: None,
+        timeout_ms: 15000,
+        interval_ms: 50,
+        max_parallel: None,
+    })
+    .unwrap();
+    assert_eq!(settled.state.status, RunStatus::Done);
 }
 
 #[test]
 fn wait_timeout_does_not_stop_an_active_run() {
-    let fixture = fixture();
-    let started = start(&fixture);
-    assert_eq!(started["status"], "running");
-    assert!(started["revision"].as_u64().unwrap() >= 1);
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = repo();
+    let store = dir.path().join(".lyra/store");
+    ensure_store(&store).unwrap();
+    start_slow_run(dir.path(), &store, 5.0, "run-wait-timeout");
+    let run_dir = run_dir_for(dir.path(), "run-wait-timeout");
 
-    let waited = okay_json(&run(
-        &fixture,
-        &[
-            "conduct",
-            "wait",
-            "--run",
-            "run-wait",
-            "--timeout-ms",
-            "100",
-            "--interval-ms",
-            "10",
-            "--backend",
-            "headless",
-            "--json",
-            "--concise",
-        ],
-    ));
-    assert_eq!(waited["timedOut"], true);
-    assert_eq!(waited["status"], "running");
+    let outcome = wait_run(WaitOptions {
+        run_dir: run_dir.clone(),
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        after_revision: Some(2),
+        timeout_ms: 300,
+        interval_ms: 50,
+        max_parallel: None,
+    })
+    .unwrap();
+    assert!(outcome.timed_out);
+    assert_eq!(outcome.state.status, RunStatus::Running);
 
-    let report = okay_json(&run(
-        &fixture,
-        &["report", "--run", "run-wait", "--json", "--concise"],
-    ));
-    assert_eq!(report["status"], "running");
-}
-
-#[test]
-fn wait_settles_a_slow_result_and_increments_revision() {
-    let fixture = fixture();
-    start(&fixture);
-    let before = okay_json(&run(
-        &fixture,
-        &[
-            "conduct",
-            "wait",
-            "--run",
-            "run-wait",
-            "--timeout-ms",
-            "100",
-            "--interval-ms",
-            "10",
-            "--backend",
-            "headless",
-            "--json",
-            "--concise",
-        ],
-    ));
-    let revision = before["revision"].as_u64().unwrap();
-
-    sleep(Duration::from_millis(1200));
-    let after = okay_json(&run(
-        &fixture,
-        &[
-            "conduct",
-            "wait",
-            "--run",
-            "run-wait",
-            "--after-revision",
-            &revision.to_string(),
-            "--timeout-ms",
-            "2000",
-            "--interval-ms",
-            "50",
-            "--backend",
-            "headless",
-            "--json",
-            "--concise",
-        ],
-    ));
-    assert_eq!(after["status"], "done");
-    assert_eq!(after["timedOut"], false);
-    assert!(after["revision"].as_u64().unwrap() > revision);
-    assert_eq!(after["tickets"][0]["status"], "done");
-}
-
-#[test]
-fn wait_returns_immediately_when_the_revision_is_newer() {
-    let fixture = fixture();
-    start(&fixture);
-    let current = okay_json(&run(
-        &fixture,
-        &["report", "--run", "run-wait", "--json", "--concise"],
-    ));
-    let revision = current["revision"].as_u64().unwrap();
-    let waited = okay_json(&run(
-        &fixture,
-        &[
-            "conduct",
-            "wait",
-            "--run",
-            "run-wait",
-            "--after-revision",
-            &revision.saturating_sub(1).to_string(),
-            "--timeout-ms",
-            "2000",
-            "--interval-ms",
-            "50",
-            "--backend",
-            "headless",
-            "--json",
-            "--concise",
-        ],
-    ));
-    assert_eq!(waited["timedOut"], false);
-    assert_eq!(waited["revision"], revision);
-}
-
-#[test]
-fn old_state_files_without_revision_load_as_zero() {
-    let fixture = fixture();
-    let state = start(&fixture);
-    assert!(state["revision"].as_u64().unwrap() >= 1);
-    let runs = fixture.home.join("runs");
-    let project = fs::read_dir(&runs).unwrap().next().unwrap().unwrap().path();
-    let run_dir = project.join("run-wait");
-    let path = run_dir.join("state.json");
-    let mut value: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    value.as_object_mut().unwrap().remove("revision");
-    let mut file = fs::File::create(&path).unwrap();
-    file.write_all(serde_json::to_string_pretty(&value).unwrap().as_bytes())
-        .unwrap();
-    let report = okay_json(&run(
-        &fixture,
-        &["report", "--run", "run-wait", "--json", "--concise"],
-    ));
-    assert_eq!(report["revision"], 0);
+    let settled = wait_run(WaitOptions {
+        run_dir,
+        backend: Some(Box::new(FakeSpawnBackend::new())),
+        after_revision: None,
+        timeout_ms: 15000,
+        interval_ms: 50,
+        max_parallel: None,
+    })
+    .unwrap();
+    assert_eq!(settled.state.status, RunStatus::Done);
 }

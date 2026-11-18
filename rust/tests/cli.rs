@@ -118,11 +118,11 @@ fn setup_persists_pane_backend_and_doctor_reports_the_source() {
     };
 
     // Explicit env wins and is not persisted.
-    let env_run = run(&["setup"], Some("headless"));
+    let env_run = run(&["setup"], Some("ghostty"));
     let env_out = String::from_utf8_lossy(&env_run.stdout).to_string();
     assert!(env_run.status.success(), "setup failed: {env_out}");
     assert!(
-        env_out.contains("headless (env)"),
+        env_out.contains("ghostty (env)"),
         "unexpected output: {env_out}"
     );
     let config = fs::read_to_string(home.path().join("config.toml")).unwrap();
@@ -131,7 +131,8 @@ fn setup_persists_pane_backend_and_doctor_reports_the_source() {
         "env override must not persist: {config}"
     );
 
-    // Without env or config, detection runs and persists the choice.
+    // In a scrubbed non-TTY environment setup still succeeds and reports
+    // that no pane backend could be detected, persisting nothing.
     let detected_run = run(&["setup"], None);
     let detected_out = String::from_utf8_lossy(&detected_run.stdout).to_string();
     assert!(
@@ -139,30 +140,25 @@ fn setup_persists_pane_backend_and_doctor_reports_the_source() {
         "setup failed: {detected_out}"
     );
     assert!(
-        detected_out.contains("headless (detected) — saved to config"),
+        detected_out.contains("none detected"),
         "unexpected output: {detected_out}"
     );
     let config = fs::read_to_string(home.path().join("config.toml")).unwrap();
-    assert_eq!(
-        config.matches("pane_backend").count(),
-        1,
-        "config: {config}"
+    assert!(
+        !config.contains("pane_backend"),
+        "nothing to persist without a backend: {config}"
     );
 
-    // Once persisted, config wins over detection and setup is idempotent.
-    let again = run(&["setup"], None);
-    assert!(again.status.success());
-    let config = fs::read_to_string(home.path().join("config.toml")).unwrap();
-    assert_eq!(
-        config.matches("pane_backend").count(),
-        1,
-        "config: {config}"
-    );
-
+    // A pane backend written to config is reported with its source.
+    fs::write(
+        home.path().join("config.toml"),
+        "max_parallel = 2\npane_backend = \"ghostty\"\n",
+    )
+    .unwrap();
     let doctor = run(&["doctor"], None);
     let doctor_out = String::from_utf8_lossy(&doctor.stdout).to_string();
     assert!(
-        doctor_out.contains("pane backend  headless (config)"),
+        doctor_out.contains("pane backend  ghostty (config)"),
         "doctor output: {doctor_out}"
     );
 
@@ -176,7 +172,7 @@ fn setup_persists_pane_backend_and_doctor_reports_the_source() {
     assert_eq!(broken.status.code(), Some(1));
     let broken_out = String::from_utf8_lossy(&broken.stdout).to_string();
     assert!(
-        broken_out.contains("pane_backend must be herdr|ghostty|headless"),
+        broken_out.contains("pane_backend must be herdr|ghostty"),
         "doctor output: {broken_out}"
     );
 }

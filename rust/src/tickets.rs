@@ -133,6 +133,17 @@ pub fn create_batch(
         if ticket.prompt.trim().is_empty() {
             bail!("ticket {} has an empty prompt", ticket.key);
         }
+        let Some(harness) = ticket.harness.as_deref() else {
+            let available = crate::config::load_config()
+                .and_then(|config| crate::harness::available(&config))
+                .unwrap_or_default()
+                .join(", ");
+            bail!(
+                "ticket {} must name a harness (available: {available})",
+                ticket.key
+            );
+        };
+        crate::harness::resolve(harness)?;
         if existing_ids.contains(&ticket.key) {
             bail!(
                 "ticket key {} conflicts with an existing ticket id",
@@ -270,6 +281,7 @@ pub struct TicketUpdate {
     pub clear_blocked_by: bool,
     pub labels: Vec<String>,
     pub clear_labels: bool,
+    pub harness: Option<String>,
 }
 
 impl TicketUpdate {
@@ -283,6 +295,7 @@ impl TicketUpdate {
             && !self.clear_blocked_by
             && self.labels.is_empty()
             && !self.clear_labels
+            && self.harness.is_none()
     }
 }
 
@@ -344,6 +357,12 @@ pub fn update_ticket(store: &Path, id: &str, update: TicketUpdate) -> Result<Tic
     } else if update.clear_labels {
         ticket.labels = Vec::new();
     }
+    if let Some(harness) = &update.harness {
+        crate::harness::resolve(harness)?;
+    }
+    if let Some(harness) = update.harness {
+        ticket.harness = Some(harness);
+    }
 
     if before.subject != ticket.subject {
         changes.insert(
@@ -372,6 +391,12 @@ pub fn update_ticket(store: &Path, id: &str, update: TicketUpdate) -> Result<Tic
                     .map(Value::String)
                     .unwrap_or(Value::Null),
             ),
+        );
+    }
+    if before.harness != ticket.harness {
+        changes.insert(
+            "harness".into(),
+            change(&json!(before.harness), &json!(ticket.harness)),
         );
     }
     if before.priority != ticket.priority {

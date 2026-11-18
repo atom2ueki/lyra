@@ -311,7 +311,7 @@ mod tests {
         RunSummary {
             run_id: "run".to_string(),
             status: status.to_string(),
-            backend: "headless".to_string(),
+            backend: "fake".to_string(),
             base_ref: "main".to_string(),
             created_at: "now".to_string(),
             updated_at: "now".to_string(),

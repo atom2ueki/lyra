@@ -3,6 +3,7 @@ pub mod agent;
 pub mod cli;
 pub mod config;
 pub mod graph;
+pub mod harness;
 pub mod import;
 pub mod models;
 pub mod names;

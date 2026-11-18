@@ -1,3 +1,8 @@
+//! Shared test-only pane backend: spawns worker commands as plain subprocesses
+//! so conductor tests can drive real fake-harness processes without a
+//! terminal. Lyra itself ships no such backend — managed workers are always
+//! visible.
+
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -6,36 +11,33 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::{Capabilities, PaneBackend, PaneHandle, SplitOptions, WaitResult};
+use lyra::pane::{Capabilities, PaneBackend, PaneHandle, SplitOptions, WaitResult};
 
-struct HeadlessProcess {
+struct SpawnedProcess {
     child: Child,
     log: PathBuf,
     exit_code: Option<i32>,
 }
 
 #[derive(Default)]
-pub struct HeadlessBackend {
-    processes: Mutex<HashMap<String, HeadlessProcess>>,
+pub struct FakeSpawnBackend {
+    processes: Mutex<HashMap<String, SpawnedProcess>>,
     next: Mutex<u32>,
 }
 
-impl HeadlessBackend {
+impl FakeSpawnBackend {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
 fn pid_path(pane: &str) -> PathBuf {
-    crate::config::lyra_home()
-        .join("runtime")
-        .join("headless")
-        .join(format!("{pane}.pid"))
+    std::env::temp_dir().join(format!("lyra-test-fake-{pane}.pid"))
 }
 
-impl PaneBackend for HeadlessBackend {
+impl PaneBackend for FakeSpawnBackend {
     fn name(&self) -> &str {
-        "headless"
+        "fake"
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -51,19 +53,19 @@ impl PaneBackend for HeadlessBackend {
 
     fn anchor(&self) -> Result<PaneHandle> {
         Ok(PaneHandle {
-            backend: "headless".to_string(),
-            pane: "headless".to_string(),
+            backend: "fake".to_string(),
+            pane: "fake".to_string(),
             ..Default::default()
         })
     }
 
     fn split(&self, _anchor: &PaneHandle, options: &SplitOptions) -> Result<PaneHandle> {
         let Some(command) = options.command.as_deref() else {
-            bail!("headless backend requires a command");
+            bail!("fake spawn backend requires a command");
         };
         let mut next = self.next.lock().unwrap();
         *next += 1;
-        let pane = format!("headless-{}", *next);
+        let pane = format!("fake-{}", *next);
         drop(next);
         let log_dir = options
             .log_dir
@@ -84,22 +86,17 @@ impl PaneBackend for HeadlessBackend {
             .stderr(Stdio::from(stderr))
             .spawn()
             .with_context(|| format!("spawn {command}"))?;
-        let pid = child.id();
-        let pid_file = pid_path(&pane);
-        if let Some(parent) = pid_file.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::write(&pid_file, pid.to_string());
+        let _ = fs::write(pid_path(&pane), child.id().to_string());
         self.processes.lock().unwrap().insert(
             pane.clone(),
-            HeadlessProcess {
+            SpawnedProcess {
                 child,
                 log,
                 exit_code: None,
             },
         );
         Ok(PaneHandle {
-            backend: "headless".to_string(),
+            backend: "fake".to_string(),
             pane,
             ..Default::default()
         })
@@ -109,7 +106,7 @@ impl PaneBackend for HeadlessBackend {
         let processes = self.processes.lock().unwrap();
         let process = processes
             .get(&pane.pane)
-            .ok_or_else(|| anyhow::anyhow!("headless process not found: {}", pane.pane))?;
+            .ok_or_else(|| anyhow::anyhow!("fake process not found: {}", pane.pane))?;
         Ok(fs::read_to_string(&process.log).unwrap_or_default())
     }
 
@@ -162,20 +159,11 @@ impl PaneBackend for HeadlessBackend {
 
     fn close(&self, pane: &PaneHandle) -> Result<()> {
         let mut processes = self.processes.lock().unwrap();
-        if let Some(process) = processes.get_mut(&pane.pane) {
-            if process.exit_code.is_none() {
-                let _ = process.child.kill();
-                let _ = process.child.wait();
-            }
-        } else if let Ok(pid) = fs::read_to_string(pid_path(&pane.pane)) {
-            let pid = pid.trim();
-            if !pid.is_empty() {
-                let _ = Command::new("kill")
-                    .args(["-TERM", pid])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
+        if let Some(process) = processes.get_mut(&pane.pane)
+            && process.exit_code.is_none()
+        {
+            let _ = process.child.kill();
+            let _ = process.child.wait();
         }
         let _ = fs::remove_file(pid_path(&pane.pane));
         Ok(())
@@ -186,7 +174,7 @@ impl PaneBackend for HeadlessBackend {
         Ok(processes
             .keys()
             .map(|pane| PaneHandle {
-                backend: "headless".to_string(),
+                backend: "fake".to_string(),
                 pane: pane.clone(),
                 ..Default::default()
             })

@@ -194,6 +194,7 @@ export function registerLyraTools(pi, client) {
         .array(z.string())
         .optional()
         .describe("Update: replaces the whole label list; an empty array clears it."),
+      harness: z.string().optional().describe("Update: move the ticket to another registered harness."),
     }),
     approval: WRITE,
     async execute(_id, params, signal, onUpdate, ctx) {
@@ -206,7 +207,7 @@ export function registerLyraTools(pi, client) {
         );
       }
       if (params.action === "update") {
-        const writable = [params.subject, params.prompt, params.acceptance, params.priority, params.blockedBy, params.labels];
+        const writable = [params.subject, params.prompt, params.acceptance, params.priority, params.blockedBy, params.labels, params.harness];
         if (writable.every((field) => field === undefined)) {
           return failed(
             new LyraCliError("invalid_input", "Provide at least one field to update", {
@@ -239,6 +240,7 @@ export function registerLyraTools(pi, client) {
               for (const label of params.labels) args.push("--label", label);
             }
           }
+          if (params.harness !== undefined) args.push("--harness", params.harness);
           const ticket = await client.json(args, call);
           const summary = [
             `Updated ${ticket.id} ${ticket.subject} [${ticket.status}]`,
@@ -298,7 +300,7 @@ export function registerLyraTools(pi, client) {
             acceptance: z.string().optional(),
             plan: z.string().optional(),
             parent: z.string().optional(),
-            harness: z.string().optional(),
+            harness: z.string().describe("Harness that runs this ticket; see `lyra setup` for available ones."),
           }),
         )
         .describe("Tickets to create in one validated batch."),
@@ -360,7 +362,7 @@ export function registerLyraTools(pi, client) {
       maxParallel: z.number().int().positive().optional(),
       maxSeconds: z.number().int().positive().optional(),
       base: z.string().optional(),
-      backend: z.enum(["herdr", "ghostty", "headless"]).optional(),
+      backend: z.enum(["herdr", "ghostty"]).optional(),
       dryRun: z.boolean().optional(),
     }),
     approval: WRITE,
