@@ -107,8 +107,9 @@ imported stores remain valid.
 
 Each worker gets a worktree, a `TASK.md` brief, a claim-scoped file channel, and a generated
 `roles.yml` for OMP subagent routing. Workers report through the extension; non-OMP harnesses
-(herdr-recognized agents via `agent start --kind`, unrecognized TUIs such as `dsh tui` via a
-raw pane) use `RESULT.md` with these fields:
+(herdr-recognized agents via `agent start --kind`; one-shot CLIs such as `dsh headless "{prompt}"`
+stream through the pane into the channel via tee; unrecognized TUIs run in a raw pane) use
+`RESULT.md` with these fields:
 
 ```text
 status: done|blocked|failed|needs_input

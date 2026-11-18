@@ -226,10 +226,10 @@ pub fn save_state(state: &mut RunState) -> Result<()> {
     Ok(())
 }
 
-// Workers cannot answer approval prompts: the headless backend has no TTY and
-// pane backends would stall until a human notices. "write" still gates bash, so
-// the default posture maps to yolo; the isolation boundary is the run worktree,
-// the run branch, and lead-side review before merge. Safe keeps prompting for
+// Workers cannot answer approval prompts: conductor-driven launches have no
+// human at the pane and omp's "write" mode still gates bash. The default
+// posture maps to yolo; the isolation boundary is the run worktree, the run
+// branch, and lead-side review before merge. Safe keeps prompting for
 // operators who accept an interactive supervisor.
 fn approval_args(posture: ApprovalPosture) -> Vec<String> {
     match posture {
@@ -1540,7 +1540,7 @@ mod tests {
             approval: ApprovalPosture::Ask,
             worker_layout: WorkerLayout::Auto,
             enabled_harnesses: Vec::new(),
-            backend: "headless".to_string(),
+            backend: "fake".to_string(),
             base_ref: "main".to_string(),
             created_at: now_iso(),
             updated_at: now_iso(),

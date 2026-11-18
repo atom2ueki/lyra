@@ -418,6 +418,14 @@ pub fn update_ticket(store: &Path, id: &str, update: TicketUpdate) -> Result<Tic
         );
     }
 
+    // Editing a failed ticket with a real change requeues it: an orchestrator
+    // edit is the retry decision, and the only way a failed ticket becomes
+    // runnable again. A no-op edit keeps the failed state.
+    if ticket.status == TicketStatus::Failed && !changes.is_empty() {
+        ticket.status = TicketStatus::Todo;
+        changes.insert("status".into(), change(&json!("failed"), &json!("todo")));
+    }
+
     let proposed: Vec<Ticket> = list_tickets(store)?
         .into_iter()
         .map(|stored| {

@@ -772,7 +772,7 @@ fn run_setup() -> Result<i32> {
                     println!("ok");
                     config.enabled_harnesses.push(spec.name);
                 }
-                Ok(false) => println!("no READY within timeout; not enabled"),
+                Ok(false) => println!("smoke timed out without the marker file; not enabled"),
                 Err(error) => println!("failed: {error:#}"),
             }
         }

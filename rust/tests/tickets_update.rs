@@ -388,3 +388,54 @@ fn cli_update_writes_and_reports_json() {
         "rejected update must not write"
     );
 }
+
+#[test]
+fn editing_a_failed_ticket_with_a_real_change_requeues_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    lyra::store::ensure_store(&store).unwrap();
+    let ticket = lyra::store::create_ticket(
+        &store,
+        lyra::store::NewTicket {
+            project_id: "p".to_string(),
+            subject: "Retry me".to_string(),
+            prompt: "Do it.".to_string(),
+            blocked_by: Vec::new(),
+            priority: 2,
+            labels: Vec::new(),
+            model_class: None,
+            acceptance: None,
+            plan: None,
+            parent: None,
+            origin: Some("test".to_string()),
+            harness: Some("omp".to_string()),
+        },
+    )
+    .unwrap();
+    let mut stored = lyra::store::read_ticket(&store, &ticket.id)
+        .unwrap()
+        .unwrap();
+    stored.status = lyra::schema::TicketStatus::Failed;
+    lyra::store::write_ticket(&store, &stored).unwrap();
+
+    let ticket = lyra::tickets::update_ticket(
+        &store,
+        &ticket.id,
+        lyra::tickets::TicketUpdate {
+            subject: Some("Retry me, revised".to_string()),
+            prompt: None,
+            acceptance: None,
+            clear_acceptance: false,
+            priority: None,
+            blocked_by: Vec::new(),
+            clear_blocked_by: false,
+            labels: Vec::new(),
+            clear_labels: false,
+            harness: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(ticket.status, lyra::schema::TicketStatus::Todo);
+    let listed = lyra::store::list_tickets(&store).unwrap();
+    assert_eq!(listed[0].status, lyra::schema::TicketStatus::Todo);
+}
