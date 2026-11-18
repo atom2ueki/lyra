@@ -26,7 +26,7 @@ jobs:
             cross: true
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -50,7 +50,7 @@ jobs:
           cp "$binary" ../dist/pkg/lyra
           tar -czf "../dist/lyra-${{ matrix.target }}.tar.gz" -C ../dist/pkg lyra
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lyra-${{ matrix.target }}
           path: dist/lyra-${{ matrix.target }}.tar.gz
@@ -62,7 +62,7 @@ jobs:
     if: vars.ENABLE_MACOS_RUNNER == 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -76,7 +76,7 @@ jobs:
           cp target/release/lyra ../dist/pkg/lyra
           tar -czf "../dist/lyra-aarch64-apple-darwin.tar.gz" -C ../dist/pkg lyra
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lyra-aarch64-apple-darwin
           path: dist/lyra-aarch64-apple-darwin.tar.gz
@@ -90,7 +90,7 @@ jobs:
       (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped')
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: lyra-*
           merge-multiple: true
@@ -101,7 +101,7 @@ jobs:
           cd dist
           sha256sum lyra-*.tar.gz > SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2.4.1
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: dist/*
