@@ -200,10 +200,28 @@ impl PaneBackend for HerdrBackend {
         args.extend(options.args.iter().cloned());
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         if let Err(error) = self.run(&refs) {
-            if format!("{error:#}").contains("agent_not_ready") && self.agent_exists(&name) {
+            let text = format!("{error:#}");
+            if text.contains("agent_not_ready") && self.agent_exists(&name) {
                 // herdr's startup gate waits for an interactively ready agent;
                 // a worker that starts its task immediately is healthy, not failed.
                 return Ok(());
+            }
+            if text.contains("agent_name_taken") {
+                // A previous run's zombie agent still holds the canonical
+                // name; retry once with a suffix instead of burning the
+                // launch-failure budget.
+                let retry = format!("{name}-r");
+                let mut retry_args = args.clone();
+                retry_args[2] = retry.clone();
+                let retry_refs: Vec<&str> = retry_args.iter().map(String::as_str).collect();
+                match self.run(&retry_refs) {
+                    Ok(_) => return Ok(()),
+                    Err(retry_error) => {
+                        return Err(anyhow::anyhow!(
+                            "agent start failed for both {name} and {retry}: first: {text}; retry: {retry_error:#}"
+                        ));
+                    }
+                }
             }
             return Err(error);
         }
@@ -346,6 +364,10 @@ mod tests {
             r#"#!/bin/sh
 case "$1 $2" in
   "agent start")
+    if [ "$3" = "lyra-taken" ] && [ ! -f "$LYRA_HERDR_TAKEN_DONE" ]; then
+      echo '{{"error":{{"code":"agent_name_taken","message":"already used"}}}}'
+      exit 1
+    fi
     echo '{{"error":{{"code":"agent_not_ready","message":"agent is blocked during startup"}}}}'
     exit 1
     ;;
@@ -403,6 +425,36 @@ exit 2
         let bin = fake_herdr(dir.path(), true);
         unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
         start(&HerdrBackend::new()).unwrap();
+    }
+
+    #[test]
+    fn agent_name_taken_retries_with_a_suffixed_name() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_herdr(dir.path(), false);
+        let taken_done = dir.path().join("taken-done");
+        unsafe {
+            std::env::set_var("LYRA_HERDR_BIN", &bin);
+            std::env::set_var("LYRA_HERDR_TAKEN_DONE", &taken_done);
+        }
+        let backend = HerdrBackend::new();
+        // First attempt collides; the retry under -r must succeed (the fake
+        // answers not_ready, and with live=no the agent is not verified, so
+        // assert on the retry error instead).
+        let error = backend
+            .start_agent(
+                &pane(),
+                &StartAgentOptions {
+                    kind: "omp".to_string(),
+                    name: Some("lyra-taken".to_string()),
+                    args: vec!["@TASK.md".to_string()],
+                },
+            )
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("agent_not_ready"),
+            "retry must reach the suffixed start: {error:#}"
+        );
     }
 
     #[test]
