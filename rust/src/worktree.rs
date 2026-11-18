@@ -217,16 +217,34 @@ pub fn close_run_worktrees(
             ));
             continue;
         }
+        let branch = git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).ok();
+        let head = branch
+            .as_deref()
+            .zip(git(&dir, &["rev-parse", "HEAD"]).ok().as_deref())
+            .map(|(branch, head)| (branch.trim().to_string(), head.trim().to_string()));
         match remove_worktree(repo, &dir) {
-            Ok(removed) => results.push((
-                dir,
-                removed,
-                if removed {
-                    None
-                } else {
-                    Some("worktree is dirty".to_string())
-                },
-            )),
+            Ok(removed) => {
+                // A worker that never committed left a zero-commit branch
+                // behind; there is nothing to merge, so delete it with the
+                // worktree instead of leaking it.
+                if removed
+                    && let Some((branch, head)) = head
+                    && branch.starts_with("lyra/")
+                    && let Ok(base) = git(repo, &["merge-base", &branch, "HEAD"])
+                    && base.trim() == head
+                {
+                    let _ = git(repo, &["branch", "-d", &branch]);
+                }
+                results.push((
+                    dir,
+                    removed,
+                    if removed {
+                        None
+                    } else {
+                        Some("worktree is dirty".to_string())
+                    },
+                ));
+            }
             Err(error) => results.push((dir, false, Some(format!("{error:#}")))),
         }
     }
