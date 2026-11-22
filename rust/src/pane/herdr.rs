@@ -4,12 +4,26 @@ use std::process::Command;
 
 use super::{Capabilities, PaneBackend, PaneHandle, SplitOptions, StartAgentOptions, WaitResult};
 
+/// herdr's readiness gate defaults to 30 s, which is too short for a worker
+/// that starts executing its task immediately instead of idling at a prompt.
+const AGENT_START_TIMEOUT_MS: &str = "120000";
+
 #[derive(Default)]
 pub struct HerdrBackend;
 
 impl HerdrBackend {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Readiness probes are advisory: herdr reports `agent_not_ready` when the
+    /// agent is blocked during startup and `timeout` when the gate expires.
+    /// Either way the agent can already be alive and working.
+    fn readiness_probe_inconclusive(text: &str) -> bool {
+        text.contains("agent_not_ready")
+            || text.contains("\"code\":\"timeout\"")
+            || text.contains("\"code\": \"timeout\"")
+            || text.contains("timed out waiting for agent startup")
     }
 
     fn bin(&self) -> String {
@@ -195,15 +209,18 @@ impl PaneBackend for HerdrBackend {
             options.kind.clone(),
             "--pane".to_string(),
             pane.pane.clone(),
+            "--timeout".to_string(),
+            AGENT_START_TIMEOUT_MS.to_string(),
             "--".to_string(),
         ];
         args.extend(options.args.iter().cloned());
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         if let Err(error) = self.run(&refs) {
             let text = format!("{error:#}");
-            if text.contains("agent_not_ready") && self.agent_exists(&name) {
-                // herdr's startup gate waits for an interactively ready agent;
-                // a worker that starts its task immediately is healthy, not failed.
+            if Self::readiness_probe_inconclusive(&text) && self.agent_exists(&name) {
+                // The worker starts its task immediately, so herdr may never
+                // observe it idle before the readiness gate expires. A live
+                // agent means the launch succeeded; keep the pane.
                 return Ok(());
             }
             if text.contains("agent_name_taken") {
@@ -217,6 +234,12 @@ impl PaneBackend for HerdrBackend {
                 match self.run(&retry_refs) {
                     Ok(_) => return Ok(()),
                     Err(retry_error) => {
+                        let retry_text = format!("{retry_error:#}");
+                        if Self::readiness_probe_inconclusive(&retry_text)
+                            && self.agent_exists(&retry)
+                        {
+                            return Ok(());
+                        }
                         return Err(anyhow::anyhow!(
                             "agent start failed for both {name} and {retry}: first: {text}; retry: {retry_error:#}"
                         ));
@@ -368,6 +391,17 @@ case "$1 $2" in
       echo '{{"error":{{"code":"agent_name_taken","message":"already used"}}}}'
       exit 1
     fi
+    if [ "$3" = "lyra-slow" ]; then
+      case " $* " in
+        *" --timeout 120000 "*) ;;
+        *)
+          echo '{{"error":{{"code":"bad_arguments","message":"missing explicit timeout"}}}}'
+          exit 1
+          ;;
+      esac
+      echo '{{"error":{{"code":"timeout","message":"timed out waiting for agent startup"}}}}'
+      exit 1
+    fi
     echo '{{"error":{{"code":"agent_not_ready","message":"agent is blocked during startup"}}}}'
     exit 1
     ;;
@@ -425,6 +459,46 @@ exit 2
         let bin = fake_herdr(dir.path(), true);
         unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
         start(&HerdrBackend::new()).unwrap();
+    }
+
+    #[test]
+    fn readiness_timeout_with_a_live_agent_is_not_a_failure() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_herdr(dir.path(), true);
+        unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
+        HerdrBackend::new()
+            .start_agent(
+                &pane(),
+                &StartAgentOptions {
+                    kind: "omp".to_string(),
+                    name: Some("lyra-slow".to_string()),
+                    args: vec!["@TASK.md".to_string()],
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn readiness_timeout_without_a_live_agent_fails() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_herdr(dir.path(), false);
+        unsafe { std::env::set_var("LYRA_HERDR_BIN", &bin) };
+        let error = HerdrBackend::new()
+            .start_agent(
+                &pane(),
+                &StartAgentOptions {
+                    kind: "omp".to_string(),
+                    name: Some("lyra-slow".to_string()),
+                    args: vec!["@TASK.md".to_string()],
+                },
+            )
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("timed out waiting for agent startup"),
+            "an unverified agent must still fail: {error:#}"
+        );
     }
 
     #[test]
