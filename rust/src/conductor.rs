@@ -45,11 +45,13 @@ pub enum RunStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum RunTicketStatus {
     Starting,
     Running,
+    #[serde(alias = "awaitingplan")]
     AwaitingPlan,
+    #[serde(alias = "awaitingreview")]
     AwaitingReview,
     Done,
     Blocked,
@@ -1218,12 +1220,12 @@ pub fn monitor_run(options: MonitorOptions) -> Result<RunState> {
         if run_is_settled(&state) {
             return Ok(state);
         }
+        if options.once {
+            return Ok(state);
+        }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             state.status = RunStatus::Stopped;
             save_state(&mut state)?;
-            return Ok(state);
-        }
-        if options.once {
             return Ok(state);
         }
         sleep(Duration::from_millis(options.interval_ms));

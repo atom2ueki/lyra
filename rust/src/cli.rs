@@ -186,6 +186,15 @@ enum Command {
         #[arg(long, default_value_t = 80)]
         lines: usize,
     },
+    /// Serve the local workspace board.
+    Serve {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 4321)]
+        port: u16,
+        #[arg(long)]
+        open: bool,
+    },
     /// Upgrade the Lyra binary.
     Upgrade {
         #[arg(long)]
@@ -808,6 +817,9 @@ pub fn run() -> Result<()> {
         Some(Command::Logs { ticket, run, lines }) => {
             let context = resolve_store(None, None)?;
             print_logs(&context.root, &ticket, run, lines)
+        }
+        Some(Command::Serve { host, port, open }) => {
+            crate::server::serve(crate::server::ServeOptions { host, port, open })
         }
         Some(Command::Upgrade {
             check,

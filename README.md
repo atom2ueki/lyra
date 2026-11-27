@@ -19,6 +19,8 @@ The 0.7 core is deliberately small:
 - **File contract** — `TASK.md`, `RESULT.md`, `worker.log`. Any agent CLI can be a worker.
 - **Human gates** — optional plan gate, mandatory review gate, `approve` / `reject`, merge
   conflict detection, and feedback turns.
+- **Local board** — `lyra serve` opens a Todos-style workspace with Backlog / In progress /
+  Needs you / Done, ticket detail, plan/diff/result tabs, and gate buttons.
 
 Tool-specific integrations are adapters, not core. OMP, Claude Code, Codex, or any other CLI is
 selected by the project's worker command.
@@ -58,6 +60,7 @@ lyra add "Add rate limiting to the login endpoint"
 lyra tickets list --details
 lyra status
 lyra start --max 2
+lyra serve --open
 lyra monitor --once
 lyra approve QuietHarbor
 lyra reject QuietHarbor --note "keep the old cookie fallback"
@@ -88,6 +91,20 @@ build = ["omp", "--approval-mode", "yolo"]
 
 New tickets use readable `AdjectiveNoun` ids such as `QuietHarbor`; legacy `T-001` ids from
 imported stores remain valid.
+
+## Local board
+
+```sh
+lyra serve --open
+```
+
+The board binds to `127.0.0.1:4321` by default (local only, no auth). It shows four columns:
+Backlog, In progress, Needs you, and Done. Clicking a card opens the ticket detail with
+Overview / Plan / Changes / Result / Artifact / Log tabs. Plan and review gates can be approved
+or rejected directly in the detail panel; the background monitor advances running workers every
+second. `New ticket` creates a ticket from the board.
+
+<img src="docs/lyra-board.webp" alt="Lyra local board: sidebar, four-column board, and plan gate detail">
 
 ## Worker contract
 
@@ -145,7 +162,9 @@ rust/src/
   worker.rs        TASK.md / RESULT.md / PLAN.md contract
   worktree.rs      isolated branches and cleanup
   project_config.rs  lyra.toml
-  cli.rs           init/add/tickets/start/monitor/approve/reject/wait/stop/report/logs/close
+  server.rs        local HTTP API + embedded board
+  web/index.html   Todos-style board UI
+  cli.rs           init/add/tickets/start/monitor/approve/reject/serve/wait/stop/report/logs/close
 ```
 
 There is no pane backend, harness registry, model policy, OMP extension, or import adapter in the
@@ -153,7 +172,6 @@ core. Those were removed in the 0.7 refactor; a worker command is the integratio
 
 ## Non-goals for 0.7 core
 
-- Board UI / local web server (next layer)
 - Team / multi-user / auth
 - Remote machines / cloud sandboxes
 - OMP, Claude Code, Codex, or MCP adapters

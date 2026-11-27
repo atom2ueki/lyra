@@ -9,6 +9,7 @@ pub mod project;
 pub mod project_config;
 pub mod runner;
 pub mod schema;
+pub mod server;
 pub mod shell;
 pub mod store;
 pub mod tickets;
