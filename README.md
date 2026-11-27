@@ -1,45 +1,27 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banners/lyra-banner-nocturne.png">
-    <img src="assets/brand/banners/lyra-banner-paper-sky.png" alt="Lyra — supervised task conductor" width="100%">
+    <img src="assets/brand/banners/lyra-banner-paper-sky.png" alt="Lyra — local task conductor" width="100%">
   </picture>
 </p>
 
 Repository: <https://github.com/atom2ueki/lyra>
 
-Lyra is a supervised task conductor for coding agents. It keeps the task graph in a local store,
-schedules ready work into agent panes, and records results as files — not as a chat transcript.
+Lyra is a local task conductor for coding agents. It keeps the task graph in a local store,
+runs each ready ticket in its own Git worktree, and exchanges results as files — not as a chat
+transcript.
 
-The core scheduler, store, pane adapters, worktree handling, and model routing are **Rust**
-(`rust/`). The only JavaScript is the OMP worker extension (`rust/src/lyra-worker.mjs`), which is
-embedded into the Rust binary and loaded into each OMP worker with `-e`.
+The 0.7 core is deliberately small:
 
-Implemented:
+- **Ticket DAG** — tickets, dependencies, claims, attempts, events.
+- **Worktrees** — one isolated branch/worktree per ticket, safe parallel execution.
+- **Generic process runner** — a worker is a command. No pane backend, no harness registry.
+- **File contract** — `TASK.md`, `RESULT.md`, `worker.log`. Any agent CLI can be a worker.
+- **Human gates** — plan and review are the next layer; the core already parks `needs_input`
+  and keeps the worktree for resume.
 
-- Lyra ticket schema v1 + local store + DAG validation
-- `omp-kanban` import adapter
-- `lyra init` / `setup` / `import` / `status` / `graph` / `models` / `doctor`
-- `PaneBackend`: herdr, Ghostty — chosen by `LYRA_PANE_BACKEND`, then the
-  `pane_backend` key in `config.toml` (written by `lyra setup`), then terminal detection.
-  There is no invisible-worker backend: Lyra manages visible workers only; a harness's
-  own internal headless behavior is its business. New terminals are added as
-  `PaneBackend` implementations; there is no runtime plugin system by design.
-- Harness registry: built-in templates (omp, dsh, claude, codex, gemini, opencode, kimi,
-  qwen) plus user templates in `~/.lyra/harnesses.d/<name>.toml` that shadow built-ins.
-  `enabled_harnesses` in `config.toml` is the whitelist; tickets must name a harness;
-  `lyra setup` probes, offers enabling (with a live smoke test), and persists it.
-- `worker_layout = pane|tab|auto` in `config.toml`: where workers appear. `auto` (default)
-  puts the first worker in a sibling pane of the orchestrator and each additional worker
-  in its own tab; every worker surface is labeled `lyra-<ticket>`.
-- worker extension (`lyra_progress`, `lyra_discover`, `lyra_finish`)
-- `lyra conduct start|monitor|resume|stop|report`, `lyra add`, `lyra logs`, `lyra close`
-- run-scoped worktrees, claims, state/events
-- blocker suspension/checkpoint/resume and `needs_input`
-- model policy: classes, roles, provider caps, usage-aware selection, per-worker role overlay
-- cross-agent launch (`omp`/`codex`/`claude`) with a `RESULT.md` fallback
-- OMP adapter package (`packages/omp`) — six typed lead-agent tools plus the human `/lyra` command
-
-No board UI, no native terminal. Those are non-goals for the current product.
+Tool-specific integrations are adapters, not core. OMP, Claude Code, Codex, or any other CLI is
+selected by the project's worker command.
 
 ## Install
 
@@ -72,65 +54,94 @@ version, `--force` to reinstall the same version, or `--version 0.1.0` to pin a 
 
 ```sh
 lyra init
-lyra import omp-kanban ~/Documents/atom2ueki/omp-kanban/.omp/kanban
-lyra conduct status
-lyra models
-lyra graph --format mermaid
-lyra tickets update QuietHarbor --prompt "new prompt" --priority 4 --json
-lyra tickets update QuietHarbor --blocked-by SwiftFalcon --json
-lyra conduct start --max 2
-lyra conduct monitor
-lyra conduct resume --run <run-id>
+lyra add "Add rate limiting to the login endpoint"
+lyra tickets list --details
+lyra status
+lyra start --max 2
+lyra monitor --once
+lyra wait --timeout-ms 30000
 lyra report
 lyra logs QuietHarbor
 lyra close
 ```
 
-`LYRA_HOME` overrides `~/.lyra`. Run `lyra setup` once per machine: it verifies git,
-probes the harness inventory, resolves the pane backend, and persists `pane_backend`
-and `enabled_harnesses` in `~/.lyra/config.toml`. `lyra setup` on a TTY runs a wizard
-(enable harnesses, each with a smoke test in a real pane). Workers are always visible;
-running without a terminal is an error. `LYRA_PANE_BACKEND=herdr|ghostty` overrides the
-configured backend for one invocation; `LYRA_OMP_BIN` / `LYRA_<NAME>_BIN` override
-harness binaries for tests.
+`LYRA_HOME` overrides `~/.lyra` (stores and runs). The project config lives in `lyra.toml` at the
+repository root:
 
-Roles: the **orchestrator** (the human plus the lead agent session) owns the ticket
-store — only it creates and updates tickets. The **conductor** is the Lyra run engine
-that claims, launches, and settles workers. A **worker** implements exactly one ticket
-in its run worktree and reports back through its result channel and `lyra_discover`;
-it never edits the store.
+```toml
+[project]
+base_ref = "main"
+max_parallel = 2
+max_seconds = 3600
+
+[worker]
+# The command runs inside the ticket's worktree. `{task}` is the generated
+# TASK.md path; if omitted, Lyra appends it as the last argument.
+build = ["omp", "--approval-mode", "yolo"]
+
+# Optional environment for every worker:
+# [worker.env]
+# DATABASE_URL = "postgres://localhost/app"
+```
 
 New tickets use readable `AdjectiveNoun` ids such as `QuietHarbor`; legacy `T-001` ids from
 imported stores remain valid.
 
 ## Worker contract
 
-Each worker gets a worktree, a `TASK.md` brief, a claim-scoped file channel, and a generated
-`roles.yml` for OMP subagent routing. Workers report through the extension; non-OMP harnesses
-(herdr-recognized agents via `agent start --kind`; one-shot CLIs such as `dsh headless "{prompt}"`
-stream through the pane into the channel via tee; unrecognized TUIs run in a raw pane) use
-`RESULT.md` with these fields:
+Each worker gets:
+
+- a Git worktree on its own branch,
+- `workers/<ticket>/TASK.md`,
+- `workers/<ticket>/RESULT.md` as the result path,
+- `workers/<ticket>/worker.log` for stdout/stderr,
+- environment variables `LYRA_RUN_ID`, `LYRA_TICKET_ID`, `LYRA_TICKET_SUBJECT`,
+  `LYRA_CLAIM_ID`, `LYRA_WORKTREE`, `LYRA_PROMPT_FILE`, `LYRA_RESULT_FILE`,
+  `LYRA_PLAN_FILE`, `LYRA_DIFF_FILE`, and `LYRA_ATTEMPT`.
+
+A worker finishes by committing its work and writing:
 
 ```text
 status: done|blocked|failed|needs_input
-summary: <what changed, or the question>
+summary: <what changed, or what you need>
 verification: <checks actually run>
-blockers: <ticket ids discovered in this attempt>
+blockers: <comma-separated ticket ids, blocked only>
 ```
 
-The conductor owns `state.json`, tickets, claims, and worktrees. A worker never edits the ticket
-store or another worktree.
+`done` requires a clean worktree. `blocked` adds the named tickets as blockers and keeps the
+worktree for resume. `needs_input` parks the ticket and keeps the worktree. `failed` is retried
+up to 3 attempts in the same worktree.
 
-## OMP adapter
+The conductor owns the store, claims, attempt state, and worktrees. A worker never edits the
+ticket store or another worktree.
 
-```sh
-omp plugin link ./packages/omp
+## Architecture
+
+```text
+rust/src/
+  schema.rs        ticket/run schema + validation
+  store.rs         tickets, claims, events, retry requeue
+  graph.rs         ready/blocked graph projections
+  conductor.rs     scheduler, attempts, settle, stop/close
+  runner.rs        process spawn, status, SIGTERM/SIGKILL, logs
+  worker.rs        TASK.md / RESULT.md contract
+  worktree.rs      isolated branches and cleanup
+  project_config.rs  lyra.toml
+  cli.rs           init/add/tickets/start/monitor/wait/stop/report/logs/close
 ```
 
-The adapter exposes six typed tools to the lead agent — `lyra_status`, `lyra_tickets`
-(list/show/read or update/write), `lyra_tickets_create`, `lyra_start`, `lyra_wait`, and
-`lyra_control`. It shells out to the `lyra` binary and owns no state. Workers use the separate
-`lyra-worker.mjs` extension and never call the CLI. `/lyra` remains a human/debug escape hatch.
+There is no pane backend, harness registry, model policy, OMP extension, or import adapter in the
+core. Those were removed in the 0.7 refactor; a worker command is the integration point.
+
+## Non-goals for 0.7 core
+
+- Board UI / local web server (next layer)
+- Plan and review gates (next layer; `needs_input` is already parked)
+- Team / multi-user / auth
+- Remote machines / cloud sandboxes
+- OMP, Claude Code, Codex, or MCP adapters
+- Model policy / provider usage routing
 
 The design and research docs live in `~/.agents/plans/lyra.md` and
-`~/.agents/plans/lyra-research.md`.
+`~/.agents/plans/lyra-research.md`. The 0.7 simplification map and lifecycle animation live in
+`docs/lyra-0.7-simplification.html` and `docs/lyra-0.7-lifecycle-demo.html`.

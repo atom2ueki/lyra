@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
-use chrono::Utc;
+use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -9,34 +9,24 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use crate::config::{ApprovalPosture, LyraConfig, MergeMode, WorkerLayout};
-use crate::models::{
-    ModelInfo, ModelPolicy, UsageReport, load_model_catalog, load_policy, load_usage, provider_of,
-    select_model, subagent_roles, write_role_overlay,
-};
-use crate::pane::{
-    PaneBackend, PaneHandle, SplitDirection, SplitOptions, StartAgentOptions, select_backend,
-};
 use crate::project::runs_dir_for;
+use crate::project_config::ProjectConfig;
+use crate::runner::{self, WorkerHandle};
 use crate::schema::{Ticket, TicketStatus, now_iso, ready_tickets, validate_graph};
-use crate::shell::command_line;
 use crate::store::{
-    NewTicket, SuspendArgs, claim_ticket, create_ticket, finish_ticket, list_tickets, read_ticket,
-    release_ticket, suspend_ticket, update_execution,
+    SuspendArgs, claim_ticket, finish_ticket, list_tickets, release_ticket, suspend_ticket,
 };
 use crate::worker::{
-    Continuation, TaskBriefArgs, WorkerChannel, WorkerConfig, WorkerPaths, WorkerResultStatus,
-    ensure_worker_extension, read_result, read_state, render_task_brief, write_config,
-    write_response, write_task_brief,
+    WorkerPaths, WorkerResultStatus, read_result, read_state, render_task_brief, write_task_brief,
 };
 use crate::worktree::{
-    WorktreeInfo, close_run_worktrees, create_worktree, delete_unchanged_branch, detect_base_ref,
-    remove_worktree, resume_worktree,
+    WorktreeInfo, close_run_worktrees, create_worktree, detect_base_ref, resume_worktree,
 };
 
-/// Consecutive launch failures tolerated for one ticket within a run before the
-/// ticket is marked failed in the store instead of being relaunched.
-pub const MAX_LAUNCH_FAILURES: u32 = 3;
+/// Consecutive attempts tolerated for one ticket within a run before it is
+/// left failed. Retry is always explicit: the same worktree, the same branch.
+pub const MAX_ATTEMPTS: u32 = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
@@ -77,13 +67,12 @@ impl RunTicketStatus {
 pub struct RunTicketState {
     pub status: RunTicketStatus,
     pub claim_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pane: Option<PaneHandle>,
+    /// `process` is the only backend in 0.7. The field stays for status
+    /// compatibility with the OMP adapter and older consumers.
+    pub model: Option<String>,
     pub worktree: String,
     pub branch: String,
     pub base_head: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,12 +80,14 @@ pub struct RunTicketState {
     pub started_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    #[serde(default)]
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerHandle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(default)]
-    pub launch_failures: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,24 +101,20 @@ pub struct RunState {
     pub run_dir: String,
     pub status: RunStatus,
     pub max_parallel: u32,
-    pub max_per_provider: HashMap<String, u32>,
-    pub approval: ApprovalPosture,
     #[serde(default)]
-    pub worker_layout: WorkerLayout,
-    #[serde(default)]
-    pub enabled_harnesses: Vec<String>,
-    pub backend: String,
+    pub max_seconds: Option<u64>,
     pub base_ref: String,
+    /// Always `process` in 0.7; retained for status consumers.
+    pub backend: String,
+    pub worker_build: Vec<String>,
+    #[serde(default)]
+    pub worker_plan: Option<Vec<String>>,
+    #[serde(default)]
+    pub worker_env: HashMap<String, String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
     pub revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_policy: Option<ModelPolicy>,
-    #[serde(default)]
-    pub model_catalog: Vec<ModelInfo>,
-    #[serde(default)]
-    pub usage: Vec<UsageReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planned_tickets: Vec<String>,
     #[serde(default)]
@@ -138,22 +125,17 @@ pub struct StartOptions {
     pub repo: PathBuf,
     pub store: PathBuf,
     pub project_id: String,
-    pub config: LyraConfig,
-    pub backend: Option<Box<dyn PaneBackend>>,
+    pub config: ProjectConfig,
     pub max_parallel: Option<u32>,
     pub max_seconds: Option<u64>,
     pub ticket_ids: Vec<String>,
     pub base_ref: Option<String>,
     pub dry_run: bool,
     pub run_id: Option<String>,
-    pub model_policy: Option<ModelPolicy>,
-    pub models: Option<Vec<ModelInfo>>,
-    pub usage: Option<Vec<UsageReport>>,
 }
 
 pub struct MonitorOptions {
     pub run_dir: PathBuf,
-    pub backend: Option<Box<dyn PaneBackend>>,
     pub once: bool,
     pub interval_ms: u64,
     pub timeout_ms: Option<u64>,
@@ -162,7 +144,6 @@ pub struct MonitorOptions {
 
 pub struct WaitOptions {
     pub run_dir: PathBuf,
-    pub backend: Option<Box<dyn PaneBackend>>,
     pub after_revision: Option<u64>,
     pub timeout_ms: u64,
     pub interval_ms: u64,
@@ -226,116 +207,62 @@ pub fn save_state(state: &mut RunState) -> Result<()> {
     Ok(())
 }
 
-// Workers cannot answer approval prompts: conductor-driven launches have no
-// human at the pane and omp's "write" mode still gates bash. The default
-// posture maps to yolo; the isolation boundary is the run worktree, the run
-// branch, and lead-side review before merge. Safe keeps prompting for
-// operators who accept an interactive supervisor.
-fn approval_args(posture: ApprovalPosture) -> Vec<String> {
-    match posture {
-        ApprovalPosture::Safe => vec!["--approval-mode".into(), "always-ask".into()],
-        ApprovalPosture::Ask | ApprovalPosture::Unsafe => {
-            vec!["--approval-mode".into(), "yolo".into()]
-        }
+fn git(repo: &Path, args: &[&str]) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .with_context(|| format!("run git {}", args.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn omp_args(
-    config: &WorkerConfig,
-    max_seconds: Option<u64>,
-    roles_path: Option<&Path>,
-    extension: &Path,
-) -> Vec<String> {
-    let mut args = vec![
-        "--session-dir".to_string(),
-        config.session_dir.clone(),
-        "-e".to_string(),
-        extension.display().to_string(),
-    ];
-    args.extend(approval_args(config.approval));
-    if let Some(path) = roles_path {
-        args.push("--config".to_string());
-        args.push(path.display().to_string());
-    }
-    if let Some(model) = &config.model {
-        args.push("--model".to_string());
-        args.push(model.clone());
-    }
-    if let Some(budget) = config.budget_usd {
-        args.push("--max-cost".to_string());
-        args.push(budget.to_string());
-    }
-    if let Some(seconds) = max_seconds {
-        args.push("--max-time".to_string());
-        args.push(format!("{seconds}s"));
-    }
-    args.push(format!("@{}", config.prompt_file));
-    args
+fn worktree_is_clean(path: &Path) -> Result<bool> {
+    Ok(git(path, &["status", "--porcelain"])?.is_empty())
 }
 
-fn active_providers(state: &RunState) -> HashMap<String, u32> {
-    let mut counts = HashMap::new();
-    for ticket in state.tickets.values() {
-        if ticket.status != RunTicketStatus::Running {
-            continue;
-        }
-        if let Some(model) = &ticket.model {
-            *counts.entry(provider_of(model)).or_insert(0) += 1;
-        }
-    }
-    counts
+fn worker_env(
+    state: &RunState,
+    ticket_id: &str,
+    subject: &str,
+    claim_id: &str,
+    worktree: &Path,
+    paths: &WorkerPaths,
+    attempt: u32,
+) -> HashMap<String, String> {
+    let mut env = state.worker_env.clone();
+    env.insert("LYRA_RUN_ID".to_string(), state.run_id.clone());
+    env.insert("LYRA_TICKET_ID".to_string(), ticket_id.to_string());
+    env.insert("LYRA_TICKET_SUBJECT".to_string(), subject.to_string());
+    env.insert("LYRA_CLAIM_ID".to_string(), claim_id.to_string());
+    env.insert("LYRA_WORKTREE".to_string(), worktree.display().to_string());
+    env.insert(
+        "LYRA_PROMPT_FILE".to_string(),
+        paths.prompt.display().to_string(),
+    );
+    env.insert(
+        "LYRA_RESULT_FILE".to_string(),
+        paths.result_md.display().to_string(),
+    );
+    env.insert(
+        "LYRA_PLAN_FILE".to_string(),
+        paths.plan.display().to_string(),
+    );
+    env.insert(
+        "LYRA_DIFF_FILE".to_string(),
+        paths.diff.display().to_string(),
+    );
+    env.insert("LYRA_ATTEMPT".to_string(), attempt.to_string());
+    env
 }
 
-struct LaunchContext<'a> {
-    config: &'a LyraConfig,
-    max_seconds: Option<u64>,
-    base_ref: &'a str,
-    model_policy: Option<&'a ModelPolicy>,
-    models: &'a [ModelInfo],
-    usage: &'a [UsageReport],
-}
-
-/// Seconds to wait for an unrecognized TUI to boot before injecting the task
-/// prompt. Crude, but raw workers are supervised by a human in the pane.
-pub const RAW_TUI_BOOT_SECS: u64 = 2;
-
-/// Open the surface a worker occupies: a sibling pane by default, a tab when
-/// the layout asks for one or when additional workers would fragment the
-/// anchor tab. Backends without tabs fall back to a split inside `open_tab`.
-fn open_worker_surface(
-    backend: &dyn PaneBackend,
-    anchor: &PaneHandle,
-    layout: WorkerLayout,
-    workers_running: usize,
-    options: &SplitOptions,
-) -> Result<PaneHandle> {
-    let use_tab = match layout {
-        WorkerLayout::Pane => false,
-        WorkerLayout::Tab => true,
-        WorkerLayout::Auto => workers_running > 0,
-    };
-    if use_tab {
-        backend.open_tab(anchor, options)
-    } else {
-        backend.split(anchor, options)
-    }
-}
-fn launch_ticket(
-    state: &mut RunState,
-    ticket: &Ticket,
-    backend: &dyn PaneBackend,
-    anchor: &PaneHandle,
-    context: &LaunchContext,
-) -> Result<()> {
-    let config = context.config;
-    let max_seconds = context.max_seconds;
-    let base_ref = context.base_ref;
-    let model_policy = context.model_policy;
-    let models = context.models;
-    let usage = context.usage;
-    let current = read_ticket(Path::new(&state.store), &ticket.id)?
-        .ok_or_else(|| anyhow::anyhow!("unknown ticket: {}", ticket.id))?;
-    let suspension = current.suspension.clone();
+fn launch_ticket(state: &mut RunState, ticket: &Ticket) -> Result<()> {
     let claim_id = Uuid::new_v4().to_string();
     let claimed = claim_ticket(
         Path::new(&state.store),
@@ -344,444 +271,510 @@ fn launch_ticket(
         &claim_id,
     )?
     .ok_or_else(|| anyhow::anyhow!("ticket {} is no longer claimable", ticket.id))?;
+    let attempt = state
+        .tickets
+        .get(&ticket.id)
+        .map(|ticket| ticket.attempt.saturating_add(1))
+        .unwrap_or(1);
 
-    let worker_name = format!("lyra-{}", ticket.id.to_lowercase())
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
+    let previous = state.tickets.get(&ticket.id).cloned();
+    let tree: WorktreeInfo = match &claimed.suspension {
+        Some(suspension) => resume_worktree(
+            Path::new(&state.repo),
+            Path::new(&suspension.worktree),
+            &suspension.branch,
+            &suspension.base_head,
+        )?,
+        None if previous.as_ref().is_some_and(|previous| {
+            !previous.worktree.is_empty()
+                && !previous.branch.is_empty()
+                && Path::new(&previous.worktree).exists()
+        }) =>
+        {
+            let previous = previous.as_ref().unwrap();
+            resume_worktree(
+                Path::new(&state.repo),
+                Path::new(&previous.worktree),
+                &previous.branch,
+                &previous.base_head,
+            )?
+        }
+        None => create_worktree(
+            Path::new(&state.repo),
+            Path::new(&state.run_dir),
+            &state.run_id,
+            &ticket.id,
+            Some(&state.base_ref),
+        )?,
+    };
+
+    let paths = WorkerPaths::new(Path::new(&state.run_dir), &ticket.id);
+    let brief = render_task_brief(&claimed, &tree.dir, &paths.prompt, &paths.result_md);
+    write_task_brief(&paths, &brief)?;
+    let command = crate::project_config::expand_command(
+        &state.worker_build,
+        &paths.prompt,
+        None,
+        &tree.dir,
+        &ticket.id,
+    );
+    let env = worker_env(
+        state,
+        &ticket.id,
+        &claimed.subject,
+        &claim_id,
+        &tree.dir,
+        &paths,
+        attempt,
+    );
+    let log_dir = Path::new(&state.run_dir).join("workers");
+    let handle = match runner::spawn(&runner::SpawnOptions {
+        ticket_id: ticket.id.clone(),
+        command,
+        cwd: tree.dir.clone(),
+        env,
+        log_dir,
+    }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            let _ = release_ticket(
+                Path::new(&state.store),
+                &ticket.id,
+                &state.run_id,
+                &claim_id,
+                &format!("worker spawn failed: {error:#}"),
+            );
+            return Err(error);
+        }
+    };
+
+    state.tickets.insert(
+        ticket.id.clone(),
+        RunTicketState {
+            status: RunTicketStatus::Running,
+            claim_id,
+            model: None,
+            worktree: tree.dir.display().to_string(),
+            branch: tree.branch,
+            base_head: tree.base_head,
+            phase: Some("building".to_string()),
+            detail: Some("worker running".to_string()),
+            started_at: now_iso(),
+            finished_at: None,
+            attempt,
+            worker: Some(handle),
+            result: None,
+            error: None,
+        },
+    );
+    save_state(state)?;
+    Ok(())
+}
+
+fn launch_ready(state: &mut RunState) -> Result<()> {
+    // Failed tickets are retried explicitly up to MAX_ATTEMPTS. Put them back
+    // in the ready pool before asking the graph; the attempt counter in run
+    // state is what bounds the retry.
+    let retry: Vec<String> = state
+        .tickets
+        .iter()
+        .filter(|(_, ticket)| {
+            ticket.status == RunTicketStatus::Failed && ticket.attempt < MAX_ATTEMPTS
         })
-        .collect::<String>();
-    let workers_running = state
+        .map(|(id, _)| id.clone())
+        .collect();
+    for ticket_id in retry {
+        let _ = crate::store::requeue_ticket(Path::new(&state.store), &ticket_id);
+    }
+    let running = state
         .tickets
         .values()
         .filter(|ticket| {
             matches!(
                 ticket.status,
-                RunTicketStatus::Running | RunTicketStatus::Starting
+                RunTicketStatus::Starting | RunTicketStatus::Running
             )
         })
-        .count();
-    let mut pane: Option<PaneHandle> = None;
-    let mut worktree: Option<WorktreeInfo> = None;
-    let mut launched_model: Option<String> = None;
-    let result = (|| -> Result<()> {
-        let tree = match &suspension {
-            Some(suspension) => resume_worktree(
-                Path::new(&state.repo),
-                Path::new(&suspension.worktree),
-                &suspension.branch,
-                &suspension.base_head,
-            )?,
-            None => create_worktree(
-                Path::new(&state.repo),
-                Path::new(&state.run_dir),
-                &state.run_id,
-                &ticket.id,
-                Some(base_ref),
-            )?,
-        };
-        let worker_base_head = suspension
-            .as_ref()
-            .map(|value| value.base_head.clone())
-            .unwrap_or_else(|| tree.base_head.clone());
-        worktree = Some(tree.clone());
-        let paths = WorkerPaths::new(Path::new(&state.run_dir), &ticket.id);
-        let choice = if let Some(policy) = model_policy {
-            if models.is_empty() {
-                None
-            } else {
-                select_model(
-                    policy,
-                    models,
-                    usage,
-                    ticket.model_class.as_deref(),
-                    ticket.model.as_deref(),
-                    &active_providers(state),
-                    &config.max_per_provider,
-                )
-            }
-        } else {
-            None
-        };
-        if model_policy.is_some() && !models.is_empty() && choice.is_none() {
-            anyhow::bail!(
-                "no model candidate available for class {}",
-                ticket.model_class.as_deref().unwrap_or("default")
-            );
-        }
-        let model = choice
-            .as_ref()
-            .map(|choice| choice.selector.clone())
-            .or_else(|| ticket.model.clone());
-        launched_model = model.clone();
-        let roles_path = match (model_policy, &choice) {
-            (Some(policy), Some(choice)) => {
-                let path = paths.root.join("roles.yml");
-                write_role_overlay(&path, policy, &choice.selector)?;
-                Some(path)
-            }
-            _ => None,
-        };
-        let continuation = suspension.as_ref().map(|suspension| Continuation {
-            head: tree.base_head.clone(),
-            base_head: suspension.base_head.clone(),
-            reason: suspension.reason.clone(),
-        });
-        let worker_config = WorkerConfig {
-            schema_version: 1,
-            run_id: state.run_id.clone(),
-            claim_id: claim_id.clone(),
-            ticket_id: ticket.id.clone(),
-            project_id: state.project_id.clone(),
-            harness: ticket.harness.clone().unwrap_or_else(|| "omp".to_string()),
-            worktree: tree.dir.display().to_string(),
-            branch: tree.branch.clone(),
-            base_head: worker_base_head.clone(),
-            session_dir: Path::new(&state.run_dir)
-                .join("sessions")
-                .join(crate::worktree::safe_segment(&ticket.id))
-                .display()
-                .to_string(),
-            prompt_file: paths.prompt.display().to_string(),
-            approval: config.approval_posture,
-            model: model.clone(),
-            model_class: ticket.model_class.clone(),
-            model_roles: model_policy
-                .zip(choice.as_ref())
-                .map(|(policy, choice)| subagent_roles(policy, &choice.selector)),
-            budget_usd: ticket.budget_usd,
-            max_seconds,
-            continuation,
-            channel: WorkerChannel {
-                root: paths.root.display().to_string(),
-                requests: paths.requests.display().to_string(),
-                responses: paths.responses.display().to_string(),
-                state: paths.state.display().to_string(),
-                result: paths.result.display().to_string(),
-            },
-        };
-        fs::create_dir_all(&worker_config.session_dir)
-            .with_context(|| format!("create {}", worker_config.session_dir))?;
-        write_config(&paths, &worker_config)?;
-        let brief = render_task_brief(&TaskBriefArgs {
-            ticket: &claimed,
-            run_id: &state.run_id,
-            claim_id: &claim_id,
-            worktree: &tree.dir.display().to_string(),
-            branch: &tree.branch,
-            base_ref,
-            base_head: &worker_base_head,
-            model: model.as_deref(),
-            budget_usd: ticket.budget_usd,
-            result_md: &paths.result_md.display().to_string(),
-            continuation: worker_config.continuation.clone(),
-        });
-        write_task_brief(&paths, &brief)?;
-
-        let harness = ticket
-            .harness
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("ticket {} has no harness", ticket.id))?;
-        let spec = crate::harness::resolve(&harness)?;
-        let prompt = format!(
-            "You are the Lyra worker for {}. Read {} and execute it in {}. When finished, write {} with exactly these fields:\nstatus: done|blocked|failed|needs_input\nsummary: <what you did or need>\nverification: <checks you ran>\nblockers: <comma-separated ticket ids, blocked only>\nDo not edit the ticket store or another worktree.",
-            ticket.id,
-            paths.prompt.display(),
-            tree.dir.display(),
-            paths.result_md.display()
-        );
-        let mut env = HashMap::new();
-        env.insert(
-            "LYRA_WORKER_CONFIG".to_string(),
-            paths.config.display().to_string(),
-        );
-        let open_surface = |command: Option<String>, env: HashMap<String, String>| {
-            open_worker_surface(
-                backend,
-                anchor,
-                state.worker_layout,
-                workers_running,
-                &SplitOptions {
-                    direction: SplitDirection::Right,
-                    cwd: tree.dir.clone(),
-                    command,
-                    env,
-                    log_dir: Some(paths.logs.clone()),
-                },
-            )
-        };
-        match spec.launch {
-            crate::harness::LaunchStyle::Omp => {
-                let extension = ensure_worker_extension()?;
-                let args = omp_args(
-                    &worker_config,
-                    max_seconds,
-                    roles_path.as_deref(),
-                    &extension,
-                );
-                let capabilities = backend.capabilities();
-                if capabilities.start_agent {
-                    pane = Some(open_surface(None, env)?);
-                    backend.start_agent(
-                        pane.as_ref().unwrap(),
-                        &StartAgentOptions {
-                            kind: "omp".to_string(),
-                            name: Some(worker_name.clone()),
-                            args,
-                        },
-                    )?;
-                } else if capabilities.splits {
-                    let command = command_line(
-                        std::env::var("LYRA_OMP_BIN")
-                            .unwrap_or_else(|_| "omp".to_string())
-                            .as_str(),
-                        &args,
-                        &HashMap::from([(
-                            "LYRA_WORKER_CONFIG".to_string(),
-                            paths.config.display().to_string(),
-                        )]),
-                    );
-                    pane = Some(open_surface(Some(command), env)?);
-                } else {
-                    anyhow::bail!("backend {} cannot create worker panes", backend.name());
-                }
-            }
-            crate::harness::LaunchStyle::Agent { kind, args } => {
-                let capabilities = backend.capabilities();
-                if !capabilities.start_agent || !capabilities.send_text {
-                    anyhow::bail!(
-                        "backend {} cannot start a visible {} worker",
-                        backend.name(),
-                        harness
-                    );
-                }
-                pane = Some(open_surface(None, env)?);
-                backend.start_agent(
-                    pane.as_ref().unwrap(),
-                    &StartAgentOptions {
-                        kind,
-                        name: Some(worker_name.clone()),
-                        args,
-                    },
-                )?;
-                backend.send_text(pane.as_ref().unwrap(), &prompt, true)?;
-            }
-            crate::harness::LaunchStyle::Raw { command } => {
-                // A TUI herdr cannot recognize: open the pane, type the
-                // command, give the TUI a moment to boot, then inject the
-                // task prompt. Visible supervision replaces the agent state
-                // machine.
-                let capabilities = backend.capabilities();
-                if !capabilities.splits || !capabilities.send_text {
-                    anyhow::bail!(
-                        "backend {} cannot run a raw {} worker",
-                        backend.name(),
-                        harness
-                    );
-                }
-                let boot = command.join(" ");
-                pane = Some(open_surface(None, env)?);
-                backend.send_text(pane.as_ref().unwrap(), &boot, true)?;
-                std::thread::sleep(std::time::Duration::from_secs(RAW_TUI_BOOT_SECS));
-                backend.send_text(pane.as_ref().unwrap(), &prompt, true)?;
-            }
-            crate::harness::LaunchStyle::OneShot { ref template } => {
-                // One-shot CLI: the task rides on the command line, output
-                // streams through the pane via tee (visible) and lands in the
-                // channel (collectable) — the shell redirect bypasses the
-                // harness sandbox that cannot write to ~/.lyra.
-                let stdout_log = paths.root.join("stdout.log");
-                let oneshot_prompt = format!(
-                    "{prompt}\nFinally print a result block: a line with exactly ---LYRA-RESULT--- followed by lines status: done|blocked|failed|needs_input, summary: <what you did or need>, verification: <checks you ran>, blockers: <comma-separated ticket ids, blocked only>."
-                );
-                let mut argv: Vec<String> = template
-                    .iter()
-                    .map(|part| {
-                        if part == "{prompt}" {
-                            oneshot_prompt.clone()
-                        } else {
-                            part.clone()
-                        }
-                    })
-                    .collect();
-                if argv[0] == spec.binary {
-                    argv[0] = spec.resolve_binary();
-                }
-                let capabilities = backend.capabilities();
-                if !capabilities.splits || !capabilities.run_command {
-                    anyhow::bail!(
-                        "backend {} cannot run a oneshot {} worker",
-                        backend.name(),
-                        harness
-                    );
-                }
-                let inner = command_line(&argv[0], &argv[1..], &HashMap::new());
-                let command = format!(
-                    "({inner}) 2>&1 | tee {}",
-                    crate::shell::shell_quote(&stdout_log.display().to_string())
-                );
-                pane = Some(open_surface(Some(command), env)?);
-            }
-        }
-        let _ = &prompt;
-        Ok(())
-    })();
-
-    match result {
-        Ok(()) => {
-            if let Some(pane) = &pane {
-                let _ = backend.label(pane, &worker_name);
-            }
-            let now = now_iso();
-            state.tickets.insert(
-                ticket.id.clone(),
-                RunTicketState {
-                    status: RunTicketStatus::Running,
-                    claim_id,
-                    pane,
-                    worktree: worktree
-                        .as_ref()
-                        .map(|tree| tree.dir.display().to_string())
-                        .unwrap_or_default(),
-                    branch: worktree
-                        .as_ref()
-                        .map(|tree| tree.branch.clone())
-                        .unwrap_or_default(),
-                    base_head: worktree
-                        .as_ref()
-                        .map(|tree| tree.base_head.clone())
-                        .unwrap_or_default(),
-                    model: launched_model.clone(),
-                    phase: Some("starting".to_string()),
-                    detail: None,
-                    started_at: now,
-                    finished_at: None,
-                    result: None,
-                    error: None,
-                    launch_failures: 0,
-                },
-            );
-            save_state(state)?;
-            Ok(())
-        }
-        Err(error) => {
-            let previous_failures = state
-                .tickets
-                .get(&ticket.id)
-                .map_or(0, |previous| previous.launch_failures);
-            let launch_failures = previous_failures + 1;
-            if launch_failures >= MAX_LAUNCH_FAILURES {
-                let summary =
-                    format!("launch failed {launch_failures} times; last error: {error:#}");
-                if let Some(suspension) = &suspension {
-                    // A resume that keeps failing must keep its checkpoint:
-                    // finishing would clear the suspension and orphan the
-                    // worktree. Re-suspend with needs_input so the lead sees
-                    // the ticket instead of relaunching until maxSeconds. The
-                    // worktree local is None on a failed resume, so take the
-                    // checkpoint paths from the suspension itself.
-                    let args = SuspendArgs {
-                        blockers: Vec::new(),
-                        reason: summary,
-                        needs_input: true,
-                        worktree: suspension.worktree.clone(),
-                        branch: suspension.branch.clone(),
-                        base_head: suspension.base_head.clone(),
-                    };
-                    if let Err(suspend_error) = suspend_ticket(
-                        Path::new(&state.store),
-                        &ticket.id,
-                        &state.run_id,
-                        &claim_id,
-                        args,
-                    ) {
-                        eprintln!(
-                            "lyra: suspend failed launch {}: {suspend_error:#}",
-                            ticket.id
-                        );
-                    }
-                } else if let Err(finish_error) = finish_ticket(
-                    Path::new(&state.store),
-                    &ticket.id,
-                    &state.run_id,
-                    &claim_id,
-                    TicketStatus::Failed,
-                    serde_json::json!({
-                        "status": "failed",
-                        "summary": format!("launch failed {launch_failures} times"),
-                    }),
-                    Some(summary),
-                ) {
-                    eprintln!("lyra: finish failed launch {}: {finish_error:#}", ticket.id);
-                }
-            } else {
-                let _ = release_ticket(
-                    Path::new(&state.store),
-                    &ticket.id,
-                    &state.run_id,
-                    &claim_id,
-                    &format!("{error:#}"),
-                );
-            }
-            if let Some(pane) = &pane {
-                let _ = backend.close(pane);
-            }
-            if suspension.is_none()
-                && let Some(tree) = &worktree
+        .count() as u32;
+    let capacity = state.max_parallel.saturating_sub(running);
+    if capacity == 0 {
+        return Ok(());
+    }
+    let tickets = list_tickets(Path::new(&state.store))?;
+    let ready: Vec<Ticket> = ready_tickets(&tickets)
+        .into_iter()
+        .filter(|ticket| {
+            if ticket
+                .suspension
+                .as_ref()
+                .is_some_and(|suspension| suspension.needs_input)
             {
-                let _ = remove_worktree(Path::new(&state.repo), &tree.dir);
-                let _ =
-                    delete_unchanged_branch(Path::new(&state.repo), &tree.branch, &tree.base_head);
+                return false;
             }
-            let now = now_iso();
+            match state.tickets.get(&ticket.id) {
+                Some(run_ticket) => {
+                    if run_ticket.status == RunTicketStatus::Done
+                        || run_ticket.attempt >= MAX_ATTEMPTS
+                    {
+                        return false;
+                    }
+                    matches!(
+                        run_ticket.status,
+                        RunTicketStatus::Failed | RunTicketStatus::Blocked
+                    )
+                }
+                None => true,
+            }
+        })
+        .cloned()
+        .collect();
+    for ticket in ready.into_iter().take(capacity as usize) {
+        if let Err(error) = launch_ticket(state, &ticket) {
+            eprintln!("lyra: launch {} failed: {error:#}", ticket.id);
             state.tickets.insert(
                 ticket.id.clone(),
                 RunTicketState {
                     status: RunTicketStatus::Failed,
-                    claim_id,
-                    pane,
-                    worktree: worktree
-                        .as_ref()
-                        .map(|tree| tree.dir.display().to_string())
-                        .unwrap_or_default(),
-                    branch: worktree
-                        .as_ref()
-                        .map(|tree| tree.branch.clone())
-                        .unwrap_or_default(),
-                    base_head: worktree
-                        .as_ref()
-                        .map(|tree| tree.base_head.clone())
-                        .unwrap_or_default(),
-                    model: launched_model.clone(),
-                    phase: None,
-                    detail: None,
-                    started_at: now.clone(),
-                    finished_at: Some(now),
+                    claim_id: String::new(),
+                    model: None,
+                    worktree: String::new(),
+                    branch: String::new(),
+                    base_head: String::new(),
+                    phase: Some("failed".to_string()),
+                    detail: Some("launch failed".to_string()),
+                    started_at: now_iso(),
+                    finished_at: Some(now_iso()),
+                    attempt: 1,
+                    worker: None,
                     result: None,
                     error: Some(format!("{error:#}")),
-                    launch_failures,
                 },
             );
             save_state(state)?;
-            Err(error)
         }
     }
+    Ok(())
+}
+
+fn settle_worker(state: &mut RunState, ticket_id: &str) -> Result<()> {
+    let Some(run_ticket) = state.tickets.get(ticket_id).cloned() else {
+        return Ok(());
+    };
+    if run_ticket.status != RunTicketStatus::Running {
+        return Ok(());
+    }
+    let paths = WorkerPaths::new(Path::new(&state.run_dir), ticket_id);
+    let result = match read_result(&paths, ticket_id, &state.run_id, &run_ticket.claim_id)? {
+        Some(result) => result,
+        None => {
+            if let Some(worker) = &run_ticket.worker
+                && !runner::is_running(worker.pid)
+            {
+                let tail = runner::tail(Path::new(&worker.log), 20);
+                let message = if tail.is_empty() {
+                    "worker exited without RESULT.md".to_string()
+                } else {
+                    format!("worker exited without RESULT.md\n{tail}")
+                };
+                let _ = finish_ticket(
+                    Path::new(&state.store),
+                    ticket_id,
+                    &state.run_id,
+                    &run_ticket.claim_id,
+                    TicketStatus::Failed,
+                    json!({"status": "failed", "summary": message}),
+                    Some(message.clone()),
+                );
+                if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+                    ticket.status = RunTicketStatus::Failed;
+                    ticket.phase = Some("failed".to_string());
+                    ticket.detail = Some("worker exited without result".to_string());
+                    ticket.finished_at = Some(now_iso());
+                    ticket.error = Some(message);
+                }
+                save_state(state)?;
+            } else if let Some(worker_state) = read_state(&paths) {
+                let phase = worker_state
+                    .get("phase")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let detail = worker_state
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                if phase != run_ticket.phase || detail != run_ticket.detail {
+                    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+                        ticket.phase = phase;
+                        ticket.detail = detail;
+                    }
+                    save_state(state)?;
+                }
+            }
+            return Ok(());
+        }
+    };
+    if !result.claim_id.is_empty() && result.claim_id != run_ticket.claim_id {
+        return Ok(());
+    }
+    let status = match result.status {
+        WorkerResultStatus::Done => {
+            if !worktree_is_clean(Path::new(&run_ticket.worktree))? {
+                let message = "worker reported done but left uncommitted changes".to_string();
+                finish_ticket(
+                    Path::new(&state.store),
+                    ticket_id,
+                    &state.run_id,
+                    &run_ticket.claim_id,
+                    TicketStatus::Failed,
+                    serde_json::to_value(&result)?,
+                    Some(message.clone()),
+                )?;
+                RunTicketStatus::Failed
+            } else {
+                finish_ticket(
+                    Path::new(&state.store),
+                    ticket_id,
+                    &state.run_id,
+                    &run_ticket.claim_id,
+                    TicketStatus::Done,
+                    serde_json::to_value(&result)?,
+                    None,
+                )?
+                .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} claim changed before finish"))?;
+                RunTicketStatus::Done
+            }
+        }
+        WorkerResultStatus::Failed => {
+            finish_ticket(
+                Path::new(&state.store),
+                ticket_id,
+                &state.run_id,
+                &run_ticket.claim_id,
+                TicketStatus::Failed,
+                serde_json::to_value(&result)?,
+                result.summary.clone(),
+            )?;
+            RunTicketStatus::Failed
+        }
+        WorkerResultStatus::Blocked | WorkerResultStatus::NeedsInput => {
+            let blockers = if result.status == WorkerResultStatus::Blocked {
+                result.blockers.clone()
+            } else {
+                Vec::new()
+            };
+            suspend_ticket(
+                Path::new(&state.store),
+                ticket_id,
+                &state.run_id,
+                &run_ticket.claim_id,
+                SuspendArgs {
+                    blockers,
+                    reason: result.summary.clone().unwrap_or_default(),
+                    needs_input: result.status == WorkerResultStatus::NeedsInput,
+                    worktree: run_ticket.worktree.clone(),
+                    branch: run_ticket.branch.clone(),
+                    base_head: run_ticket.base_head.clone(),
+                },
+            )?;
+            RunTicketStatus::Blocked
+        }
+    };
+    if let Some(worker) = &run_ticket.worker {
+        let _ = runner::stop(worker.pid, Duration::from_secs(2));
+    }
+    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+        ticket.status = status;
+        ticket.phase = Some(
+            match status {
+                RunTicketStatus::Done => "done",
+                RunTicketStatus::Blocked => "blocked",
+                RunTicketStatus::Failed => "failed",
+                _ => "settled",
+            }
+            .to_string(),
+        );
+        ticket.finished_at = Some(now_iso());
+        ticket.result = Some(serde_json::to_value(&result)?);
+        ticket.error = if status == RunTicketStatus::Failed {
+            result.summary.clone()
+        } else {
+            None
+        };
+    }
+    save_state(state)?;
+    Ok(())
+}
+
+fn deadline_exceeded(ticket: &RunTicketState, max_seconds: Option<u64>) -> bool {
+    let Some(max_seconds) = max_seconds else {
+        return false;
+    };
+    let Ok(started) = DateTime::parse_from_rfc3339(&ticket.started_at) else {
+        return false;
+    };
+    let elapsed = Utc::now().signed_duration_since(started.with_timezone(&Utc));
+    elapsed.num_seconds() as u64 >= max_seconds
+}
+
+fn stop_timed_out(state: &mut RunState, ticket_id: &str) -> Result<()> {
+    let Some(run_ticket) = state.tickets.get(ticket_id).cloned() else {
+        return Ok(());
+    };
+    if let Some(worker) = &run_ticket.worker {
+        let _ = runner::stop(worker.pid, Duration::from_secs(2));
+    }
+    let message = format!(
+        "worker exceeded max_seconds {}",
+        state.max_seconds.unwrap_or_default()
+    );
+    let _ = finish_ticket(
+        Path::new(&state.store),
+        ticket_id,
+        &state.run_id,
+        &run_ticket.claim_id,
+        TicketStatus::Failed,
+        json!({"status": "failed", "summary": message}),
+        Some(message.clone()),
+    );
+    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+        ticket.status = RunTicketStatus::Failed;
+        ticket.phase = Some("failed".to_string());
+        ticket.detail = Some("max_seconds exceeded".to_string());
+        ticket.finished_at = Some(now_iso());
+        ticket.error = Some(message);
+    }
+    save_state(state)?;
+    Ok(())
+}
+
+fn reconcile_claims(state: &mut RunState) -> Result<()> {
+    let store_tickets = list_tickets(Path::new(&state.store))?;
+    let mut changed = false;
+    for ticket in &store_tickets {
+        if ticket.status != TicketStatus::InProgress {
+            continue;
+        }
+        let Some(execution) = &ticket.execution else {
+            continue;
+        };
+        if execution.run_id != state.run_id || state.tickets.contains_key(&ticket.id) {
+            continue;
+        }
+        eprintln!("lyra: adopting orphaned claim on {}", ticket.id);
+        let log_dir = Path::new(&state.run_dir)
+            .join("workers")
+            .join(crate::worktree::safe_segment(&ticket.id));
+        let worker = fs::read_to_string(log_dir.join("worker.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<WorkerHandle>(&text).ok())
+            .filter(|handle| runner::is_running(handle.pid));
+        state.tickets.insert(
+            ticket.id.clone(),
+            RunTicketState {
+                status: RunTicketStatus::Running,
+                claim_id: execution.claim_id.clone(),
+                model: None,
+                worktree: Path::new(&state.run_dir)
+                    .join("worktrees")
+                    .join(crate::worktree::safe_segment(&ticket.id))
+                    .display()
+                    .to_string(),
+                branch: String::new(),
+                base_head: String::new(),
+                phase: Some("adopted".to_string()),
+                detail: None,
+                started_at: now_iso(),
+                finished_at: None,
+                attempt: 1,
+                worker,
+                result: None,
+                error: None,
+            },
+        );
+        changed = true;
+    }
+    if changed {
+        save_state(state)?;
+    }
+    Ok(())
+}
+
+fn run_has_active(state: &RunState) -> bool {
+    state.tickets.values().any(|ticket| {
+        matches!(
+            ticket.status,
+            RunTicketStatus::Running | RunTicketStatus::Starting
+        )
+    })
+}
+
+fn run_is_settled(state: &RunState) -> bool {
+    !run_has_active(state)
+        && matches!(
+            state.status,
+            RunStatus::Planned
+                | RunStatus::Done
+                | RunStatus::Blocked
+                | RunStatus::Stopped
+                | RunStatus::Closed
+        )
+}
+
+pub fn monitor_once(run_dir: &Path, max_parallel: u32) -> Result<RunState> {
+    let mut state = load_state(run_dir)?;
+    reconcile_claims(&mut state)?;
+    let running: Vec<String> = state
+        .tickets
+        .iter()
+        .filter(|(_, ticket)| ticket.status == RunTicketStatus::Running)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for ticket_id in running {
+        settle_worker(&mut state, &ticket_id)?;
+        if let Some(ticket) = state.tickets.get(&ticket_id)
+            && ticket.status == RunTicketStatus::Running
+            && deadline_exceeded(ticket, state.max_seconds)
+        {
+            stop_timed_out(&mut state, &ticket_id)?;
+        }
+    }
+    state = load_state(run_dir)?;
+    state.max_parallel = max_parallel;
+    launch_ready(&mut state)?;
+    state = load_state(run_dir)?;
+    let active = run_has_active(&state);
+    let tickets = list_tickets(Path::new(&state.store))?;
+    let remaining: Vec<&Ticket> = ready_tickets(&tickets)
+        .into_iter()
+        .filter(|ticket| {
+            !ticket
+                .suspension
+                .as_ref()
+                .is_some_and(|suspension| suspension.needs_input)
+        })
+        .collect();
+    if !active && remaining.is_empty() {
+        let open = tickets
+            .iter()
+            .any(|ticket| matches!(ticket.status, TicketStatus::Todo | TicketStatus::InProgress));
+        state.status = if open {
+            RunStatus::Blocked
+        } else {
+            RunStatus::Done
+        };
+        save_state(&mut state)?;
+    }
+    Ok(state)
 }
 
 pub fn start_run(options: StartOptions) -> Result<RunState> {
-    let max_parallel = options.max_parallel.unwrap_or(options.config.max_parallel);
-    let backend = match options.backend {
-        Some(backend) => backend,
-        None => select_backend()?,
-    };
+    let max_parallel = options
+        .max_parallel
+        .unwrap_or_else(|| options.config.max_parallel());
     let tickets = list_tickets(&options.store)?;
     let graph_errors = validate_graph(&tickets);
     if !graph_errors.is_empty() {
-        anyhow::bail!("invalid ticket graph:\n- {}", graph_errors.join("\n- "));
+        bail!("invalid ticket graph:\n- {}", graph_errors.join("\n- "));
     }
     let ready: Vec<Ticket> = ready_tickets(&tickets).into_iter().cloned().collect();
     let mut candidates = ready.clone();
@@ -814,31 +807,26 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
             selected.push(ticket.clone());
         }
         if !unknown.is_empty() {
-            anyhow::bail!("unknown tickets: {}", unknown.join(", "));
+            bail!("unknown tickets: {}", unknown.join(", "));
         }
         if !not_ready.is_empty() {
-            anyhow::bail!("tickets not ready: {}", not_ready.join("; "));
+            bail!("tickets not ready: {}", not_ready.join("; "));
         }
         candidates = selected;
     }
     let base_ref = match options.base_ref {
         Some(value) => value,
-        None => detect_base_ref(&options.repo)?,
+        None => options
+            .config
+            .project
+            .base_ref
+            .clone()
+            .unwrap_or(detect_base_ref(&options.repo)?),
     };
     let run_id = options.run_id.unwrap_or_else(new_run_id);
     let run_dir = run_dir_for(&options.repo, &run_id);
     fs::create_dir_all(&run_dir).with_context(|| format!("create {}", run_dir.display()))?;
-    let model_policy = options.model_policy.or_else(|| load_policy().ok());
-    let models_supplied = options.models.is_some();
-    let model_catalog = match options.models {
-        Some(models) => models,
-        None => load_model_catalog().unwrap_or_default(),
-    };
-    let usage = match options.usage {
-        Some(usage) => usage,
-        None if models_supplied => Vec::new(),
-        None => load_usage().unwrap_or_default(),
-    };
+    let max_seconds = options.max_seconds.or(options.config.project.max_seconds);
     let mut state = RunState {
         schema_version: 1,
         run_id,
@@ -852,18 +840,15 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
             RunStatus::Running
         },
         max_parallel,
-        max_per_provider: options.config.max_per_provider.clone(),
-        approval: options.config.approval_posture,
-        worker_layout: options.config.worker_layout,
-        enabled_harnesses: options.config.enabled_harnesses.clone(),
-        backend: backend.name().to_string(),
+        max_seconds,
         base_ref: base_ref.clone(),
+        backend: "process".to_string(),
+        worker_build: options.config.worker.build.clone(),
+        worker_plan: options.config.worker.plan.clone(),
+        worker_env: options.config.worker.env.clone(),
         created_at: now_iso(),
         updated_at: now_iso(),
         revision: 0,
-        model_policy: model_policy.clone(),
-        model_catalog: model_catalog.clone(),
-        usage: usage.clone(),
         planned_tickets: candidates.iter().map(|ticket| ticket.id.clone()).collect(),
         tickets: HashMap::new(),
     };
@@ -871,41 +856,8 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
     if options.dry_run {
         return Ok(state);
     }
-    let anchor = backend.anchor()?;
-    let launch_context = LaunchContext {
-        config: &options.config,
-        max_seconds: options.max_seconds,
-        base_ref: &base_ref,
-        model_policy: model_policy.as_ref(),
-        models: &model_catalog,
-        usage: &usage,
-    };
-    // Fail fast: every selected ticket's harness must be installed and
-    // enabled before a worktree or pane exists.
-    for ticket in &candidates {
-        let harness = ticket.harness.as_deref().unwrap_or_default();
-        if harness.is_empty() {
-            anyhow::bail!(
-                "ticket {} has no harness; set one with `lyra tickets update {} --harness <name>`",
-                ticket.id,
-                ticket.id
-            );
-        }
-        if let Err(error) = crate::harness::validate(harness, &options.config) {
-            anyhow::bail!("ticket {} cannot start: {error:#}", ticket.id);
-        }
-    }
-    for ticket in candidates.into_iter().take(max_parallel as usize) {
-        if let Err(error) = launch_ticket(
-            &mut state,
-            &ticket,
-            backend.as_ref(),
-            &anchor,
-            &launch_context,
-        ) {
-            eprintln!("lyra: launch {} failed: {error:#}", ticket.id);
-        }
-    }
+    launch_ready(&mut state)?;
+    state = load_state(&run_dir)?;
     if state.tickets.is_empty() {
         state.status = RunStatus::Done;
         save_state(&mut state)?;
@@ -913,463 +865,7 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
     Ok(state)
 }
 
-fn blocker_depth(store: &Path, ticket_id: &str) -> Result<usize> {
-    let mut depth = 0;
-    let mut current = read_ticket(store, ticket_id)?;
-    let mut seen = HashSet::new();
-    while let Some(ticket) = current {
-        if let Some(parent) = ticket.parent {
-            if seen.contains(&ticket.id) {
-                break;
-            }
-            seen.insert(ticket.id);
-            depth += 1;
-            current = read_ticket(store, &parent)?;
-        } else {
-            break;
-        }
-    }
-    Ok(depth)
-}
-
-fn process_requests(state: &RunState, ticket_id: &str) -> Result<()> {
-    let paths = WorkerPaths::new(Path::new(&state.run_dir), ticket_id);
-    for (request_id, payload) in crate::worker::list_requests(&paths)? {
-        if paths.responses.join(format!("{request_id}.json")).exists() {
-            continue;
-        }
-        let result = (|| -> Result<Ticket> {
-            if let Some(existing) = payload.get("existingId").and_then(Value::as_str) {
-                return read_ticket(Path::new(&state.store), existing)?
-                    .ok_or_else(|| anyhow::anyhow!("unknown existing ticket: {existing}"));
-            }
-            if payload.get("kind").and_then(Value::as_str) == Some("blocker") {
-                let parent = read_ticket(Path::new(&state.store), ticket_id)?
-                    .ok_or_else(|| anyhow::anyhow!("unknown parent ticket: {ticket_id}"))?;
-                if parent.blocked_by.len() >= 10 {
-                    anyhow::bail!("{ticket_id} already has 10 blockers");
-                }
-                if blocker_depth(Path::new(&state.store), ticket_id)? >= 3 {
-                    anyhow::bail!("blocker depth limit 3 reached at {ticket_id}");
-                }
-            }
-            create_ticket(
-                Path::new(&state.store),
-                NewTicket {
-                    project_id: state.project_id.clone(),
-                    subject: payload
-                        .get("subject")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Discovered work")
-                        .to_string(),
-                    prompt: payload
-                        .get("prompt")
-                        .and_then(Value::as_str)
-                        .or_else(|| payload.get("reason").and_then(Value::as_str))
-                        .unwrap_or("Discovered work")
-                        .to_string(),
-                    blocked_by: Vec::new(),
-                    priority: crate::schema::PRIORITY_DEFAULT,
-                    labels: Vec::new(),
-                    model_class: Some("architecture".to_string()),
-                    acceptance: None,
-                    plan: None,
-                    parent: Some(ticket_id.to_string()),
-                    origin: Some("discovered".to_string()),
-                    harness: crate::store::read_ticket(Path::new(&state.store), ticket_id)?
-                        .and_then(|parent| parent.harness),
-                },
-            )
-        })();
-        let response = match result {
-            Ok(ticket) => json!({"ticketId": ticket.id}),
-            Err(error) => json!({"error": format!("{error:#}")}),
-        };
-        write_response(&paths, &request_id, &response)?;
-    }
-    Ok(())
-}
-
-fn close_pane(backend: &dyn PaneBackend, pane: &PaneHandle) -> Result<()> {
-    if pane.backend == backend.name() {
-        return backend.close(pane);
-    }
-    crate::pane::backend_by_name(&pane.backend)?.close(pane)
-}
-
-fn settle_worker(state: &mut RunState, ticket_id: &str, backend: &dyn PaneBackend) -> Result<()> {
-    let Some(run_ticket) = state.tickets.get(ticket_id).cloned() else {
-        return Ok(());
-    };
-    if run_ticket.status != RunTicketStatus::Running {
-        return Ok(());
-    }
-    let paths = WorkerPaths::new(Path::new(&state.run_dir), ticket_id);
-    let Some(result) = read_result(&paths)? else {
-        if let Some(worker_state) = read_state(&paths) {
-            let phase = worker_state
-                .get("phase")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let detail = worker_state
-                .get("detail")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            if phase != run_ticket.phase || detail != run_ticket.detail {
-                if let Some(ticket) = state.tickets.get_mut(ticket_id) {
-                    ticket.phase = phase.clone();
-                    ticket.detail = detail.clone();
-                }
-                let _ = update_execution(
-                    Path::new(&state.store),
-                    ticket_id,
-                    &run_ticket.claim_id,
-                    &run_ticket.claim_id,
-                    phase,
-                    detail,
-                );
-                save_state(state)?;
-            }
-        }
-        return Ok(());
-    };
-    if result.claim_id != run_ticket.claim_id {
-        return Ok(());
-    }
-    let status = match result.status {
-        WorkerResultStatus::Done => {
-            finish_ticket(
-                Path::new(&state.store),
-                ticket_id,
-                &state.run_id,
-                &run_ticket.claim_id,
-                TicketStatus::Done,
-                serde_json::to_value(&result)?,
-                None,
-            )?
-            .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} claim changed before finish"))?;
-            RunTicketStatus::Done
-        }
-        WorkerResultStatus::Failed => {
-            finish_ticket(
-                Path::new(&state.store),
-                ticket_id,
-                &state.run_id,
-                &run_ticket.claim_id,
-                TicketStatus::Failed,
-                serde_json::to_value(&result)?,
-                result.summary.clone(),
-            )?
-            .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} claim changed before finish"))?;
-            RunTicketStatus::Failed
-        }
-        WorkerResultStatus::Blocked | WorkerResultStatus::NeedsInput => {
-            let blockers = if result.status == WorkerResultStatus::Blocked {
-                result.blockers.clone()
-            } else {
-                Vec::new()
-            };
-            match suspend_ticket(
-                Path::new(&state.store),
-                ticket_id,
-                &state.run_id,
-                &run_ticket.claim_id,
-                SuspendArgs {
-                    blockers,
-                    reason: result.summary.clone().unwrap_or_default(),
-                    needs_input: result.status == WorkerResultStatus::NeedsInput,
-                    worktree: run_ticket.worktree.clone(),
-                    branch: run_ticket.branch.clone(),
-                    base_head: run_ticket.base_head.clone(),
-                },
-            ) {
-                Ok(Some(_)) => RunTicketStatus::Blocked,
-                Ok(None) => {
-                    anyhow::bail!("ticket {ticket_id} claim changed before suspend");
-                }
-                Err(_) => {
-                    finish_ticket(
-                        Path::new(&state.store),
-                        ticket_id,
-                        &state.run_id,
-                        &run_ticket.claim_id,
-                        TicketStatus::Failed,
-                        serde_json::to_value(&result)?,
-                        result.summary.clone(),
-                    )?;
-                    RunTicketStatus::Failed
-                }
-            }
-        }
-    };
-    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
-        ticket.status = status;
-        ticket.phase = Some(
-            match status {
-                RunTicketStatus::Done => "done",
-                RunTicketStatus::Blocked => "blocked",
-                RunTicketStatus::Failed => "failed",
-                _ => "settled",
-            }
-            .to_string(),
-        );
-        ticket.finished_at = Some(now_iso());
-        ticket.result = Some(serde_json::to_value(&result)?);
-    }
-    if let Some(pane) = &run_ticket.pane {
-        let _ = close_pane(backend, pane);
-    }
-    save_state(state)?;
-    Ok(())
-}
-
-fn launch_ready(state: &mut RunState, backend: &dyn PaneBackend, max_parallel: u32) -> Result<()> {
-    let running = state
-        .tickets
-        .values()
-        .filter(|ticket| ticket.status == RunTicketStatus::Running)
-        .count() as u32;
-    let capacity = max_parallel.saturating_sub(running);
-    if capacity == 0 {
-        return Ok(());
-    }
-    let tickets = list_tickets(Path::new(&state.store))?;
-    let model_policy = state.model_policy.clone();
-    let models = state.model_catalog.clone();
-    let usage = state.usage.clone();
-    let config = LyraConfig {
-        max_parallel,
-        max_per_provider: state.max_per_provider.clone(),
-        approval_posture: state.approval,
-        merge: MergeMode::Auto,
-        pane_backend: None,
-        worker_layout: state.worker_layout,
-        enabled_harnesses: state.enabled_harnesses.clone(),
-    };
-    let ready: Vec<Ticket> = ready_tickets(&tickets)
-        .into_iter()
-        .filter(|ticket| {
-            if ticket.suspension.as_ref().is_some_and(|s| s.needs_input) {
-                return false;
-            }
-            match state.tickets.get(&ticket.id) {
-                Some(run_ticket) => {
-                    if run_ticket.status == RunTicketStatus::Failed
-                        && run_ticket.launch_failures >= MAX_LAUNCH_FAILURES
-                    {
-                        return false;
-                    }
-                    matches!(
-                        run_ticket.status,
-                        RunTicketStatus::Failed | RunTicketStatus::Blocked
-                    )
-                }
-                None => true,
-            }
-        })
-        .cloned()
-        .collect();
-    if ready.is_empty() {
-        return Ok(());
-    }
-    let anchor = backend.anchor()?;
-    let base_ref = state.base_ref.clone();
-    let launch_context = LaunchContext {
-        config: &config,
-        max_seconds: None,
-        base_ref: &base_ref,
-        model_policy: model_policy.as_ref(),
-        models: &models,
-        usage: &usage,
-    };
-    for ticket in ready.into_iter().take(capacity as usize) {
-        if let Err(error) = preflight_harness(state, &ticket, &config) {
-            eprintln!("lyra: harness check {} failed: {error:#}", ticket.id);
-            continue;
-        }
-        if let Err(error) = launch_ticket(state, &ticket, backend, &anchor, &launch_context) {
-            eprintln!("lyra: launch {} failed: {error:#}", ticket.id);
-        }
-    }
-    Ok(())
-}
-
-/// A harness that went missing mid-run (or a discovered ticket naming one that
-/// was never available) suspends the ticket with needs_input instead of
-/// burning the launch-failure budget: the orchestrator decides.
-fn preflight_harness(state: &mut RunState, ticket: &Ticket, config: &LyraConfig) -> Result<()> {
-    let harness = ticket.harness.as_deref().unwrap_or_default();
-    let error = if harness.is_empty() {
-        anyhow::anyhow!("ticket {} has no harness", ticket.id)
-    } else {
-        match crate::harness::validate(harness, config) {
-            Ok(_) => return Ok(()),
-            Err(error) => error,
-        }
-    };
-    let claim_id = Uuid::new_v4().to_string();
-    claim_ticket(
-        Path::new(&state.store),
-        &ticket.id,
-        &state.run_id,
-        &claim_id,
-    )?
-    .ok_or_else(|| anyhow::anyhow!("ticket {} is no longer claimable", ticket.id))?;
-    let _ = suspend_ticket(
-        Path::new(&state.store),
-        &ticket.id,
-        &state.run_id,
-        &claim_id,
-        SuspendArgs {
-            blockers: Vec::new(),
-            reason: format!("harness unavailable: {error:#}"),
-            needs_input: true,
-            worktree: String::new(),
-            branch: String::new(),
-            base_head: String::new(),
-        },
-    );
-    let now = now_iso();
-    state.tickets.insert(
-        ticket.id.clone(),
-        RunTicketState {
-            status: RunTicketStatus::Blocked,
-            claim_id,
-            pane: None,
-            worktree: String::new(),
-            branch: String::new(),
-            base_head: String::new(),
-            model: None,
-            phase: Some("blocked".to_string()),
-            detail: Some(format!("harness unavailable: {error:#}")),
-            started_at: now.clone(),
-            finished_at: Some(now),
-            result: None,
-            error: Some(format!("{error:#}")),
-            launch_failures: 0,
-        },
-    );
-    save_state(state)?;
-    Err(error)
-}
-
-fn run_has_active(state: &RunState) -> bool {
-    state.tickets.values().any(|ticket| {
-        matches!(
-            ticket.status,
-            RunTicketStatus::Running | RunTicketStatus::Starting
-        )
-    })
-}
-
-fn run_is_settled(state: &RunState) -> bool {
-    !run_has_active(state)
-        && matches!(
-            state.status,
-            RunStatus::Planned
-                | RunStatus::Done
-                | RunStatus::Blocked
-                | RunStatus::Stopped
-                | RunStatus::Closed
-        )
-}
-
-pub fn monitor_once(
-    run_dir: &Path,
-    backend: &dyn PaneBackend,
-    max_parallel: u32,
-) -> Result<RunState> {
-    let mut state = load_state(run_dir)?;
-    reconcile_claims(&mut state)?;
-    let running: Vec<String> = state
-        .tickets
-        .iter()
-        .filter(|(_, ticket)| ticket.status == RunTicketStatus::Running)
-        .map(|(id, _)| id.clone())
-        .collect();
-    for ticket_id in running {
-        process_requests(&state, &ticket_id)?;
-        settle_worker(&mut state, &ticket_id, backend)?;
-    }
-    state = load_state(run_dir)?;
-    launch_ready(&mut state, backend, max_parallel)?;
-    state = load_state(run_dir)?;
-    let active = run_has_active(&state);
-    let tickets = list_tickets(Path::new(&state.store))?;
-    let remaining: Vec<&Ticket> = ready_tickets(&tickets)
-        .into_iter()
-        .filter(|ticket| {
-            !ticket
-                .suspension
-                .as_ref()
-                .is_some_and(|suspension| suspension.needs_input)
-        })
-        .collect();
-    if !active && remaining.is_empty() {
-        let open = tickets
-            .iter()
-            .any(|ticket| matches!(ticket.status, TicketStatus::Todo | TicketStatus::InProgress));
-        state.status = if open {
-            RunStatus::Blocked
-        } else {
-            RunStatus::Done
-        };
-        save_state(&mut state)?;
-    }
-    Ok(state)
-}
-
-/// Crash recovery: a ticket the store shows as claimed by this run but that
-/// has no run-state entry (the launcher died between launch and save) is
-/// adopted so the normal settle path collects its result and finishes it.
-/// The pane handle is gone with the unsaved state; any visible pane must be
-/// closed by hand.
-fn reconcile_claims(state: &mut RunState) -> Result<()> {
-    let store_tickets = list_tickets(Path::new(&state.store))?;
-    let mut changed = false;
-    for ticket in &store_tickets {
-        if ticket.status != TicketStatus::InProgress {
-            continue;
-        }
-        let Some(execution) = &ticket.execution else {
-            continue;
-        };
-        if execution.run_id != state.run_id || state.tickets.contains_key(&ticket.id) {
-            continue;
-        }
-        eprintln!("lyra: adopting orphaned claim on {}", ticket.id);
-        state.tickets.insert(
-            ticket.id.clone(),
-            RunTicketState {
-                status: RunTicketStatus::Running,
-                claim_id: execution.claim_id.clone(),
-                pane: None,
-                worktree: String::new(),
-                branch: String::new(),
-                base_head: String::new(),
-                model: None,
-                phase: Some("adopted".to_string()),
-                detail: None,
-                started_at: now_iso(),
-                finished_at: None,
-                result: None,
-                error: None,
-                launch_failures: 0,
-            },
-        );
-        changed = true;
-    }
-    if changed {
-        save_state(state)?;
-    }
-    Ok(())
-}
-
 pub fn monitor_run(options: MonitorOptions) -> Result<RunState> {
-    let backend = match options.backend {
-        Some(backend) => backend,
-        None => select_backend()?,
-    };
     let max_parallel = match options.max_parallel {
         Some(value) => value,
         None => load_state(&options.run_dir)?.max_parallel,
@@ -1378,7 +874,7 @@ pub fn monitor_run(options: MonitorOptions) -> Result<RunState> {
         .timeout_ms
         .map(|timeout| Instant::now() + Duration::from_millis(timeout));
     loop {
-        let mut state = monitor_once(&options.run_dir, backend.as_ref(), max_parallel)?;
+        let mut state = monitor_once(&options.run_dir, max_parallel)?;
         if run_is_settled(&state) {
             return Ok(state);
         }
@@ -1395,10 +891,6 @@ pub fn monitor_run(options: MonitorOptions) -> Result<RunState> {
 }
 
 pub fn wait_run(options: WaitOptions) -> Result<WaitOutcome> {
-    let backend = match options.backend {
-        Some(backend) => backend,
-        None => select_backend()?,
-    };
     let deadline = Instant::now() + Duration::from_millis(options.timeout_ms);
     let after_revision = match options.after_revision {
         Some(revision) => revision,
@@ -1413,7 +905,7 @@ pub fn wait_run(options: WaitOptions) -> Result<WaitOutcome> {
             });
         }
         let max_parallel = options.max_parallel.unwrap_or(state.max_parallel);
-        let state = monitor_once(&options.run_dir, backend.as_ref(), max_parallel)?;
+        let state = monitor_once(&options.run_dir, max_parallel)?;
         if state.revision > after_revision || run_is_settled(&state) {
             return Ok(WaitOutcome {
                 state,
@@ -1430,18 +922,14 @@ pub fn wait_run(options: WaitOptions) -> Result<WaitOutcome> {
     }
 }
 
-pub fn stop_run(run_dir: &Path, backend: Option<Box<dyn PaneBackend>>) -> Result<RunState> {
-    let backend = match backend {
-        Some(backend) => backend,
-        None => select_backend()?,
-    };
+pub fn stop_run(run_dir: &Path) -> Result<RunState> {
     let mut state = load_state(run_dir)?;
     for (ticket_id, run_ticket) in state.tickets.clone() {
         if run_ticket.status != RunTicketStatus::Running {
             continue;
         }
-        if let Some(pane) = &run_ticket.pane {
-            let _ = close_pane(backend.as_ref(), pane);
+        if let Some(worker) = &run_ticket.worker {
+            let _ = runner::stop(worker.pid, Duration::from_secs(2));
         }
         let _ = release_ticket(
             Path::new(&state.store),
@@ -1497,9 +985,6 @@ pub fn close_run(run_dir: &Path) -> Result<RunState> {
     Ok(state)
 }
 
-/// Release every store claim held by this run, not just the ones tracked in
-/// run state: a start that died between claim and save leaves orphans the
-/// state view cannot see. The store is the source of truth.
 fn release_run_claims(store: &Path, run_id: &str) {
     let Ok(tickets) = list_tickets(store) else {
         return;
@@ -1524,7 +1009,6 @@ fn release_run_claims(store: &Path, run_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ApprovalPosture;
 
     fn test_state(dir: &Path) -> RunState {
         RunState {
@@ -1536,18 +1020,15 @@ mod tests {
             run_dir: dir.display().to_string(),
             status: RunStatus::Running,
             max_parallel: 1,
-            max_per_provider: HashMap::new(),
-            approval: ApprovalPosture::Ask,
-            worker_layout: WorkerLayout::Auto,
-            enabled_harnesses: Vec::new(),
-            backend: "fake".to_string(),
+            max_seconds: None,
             base_ref: "main".to_string(),
+            backend: "process".to_string(),
+            worker_build: vec!["true".to_string()],
+            worker_plan: None,
+            worker_env: HashMap::new(),
             created_at: now_iso(),
             updated_at: now_iso(),
             revision: 0,
-            model_policy: None,
-            model_catalog: Vec::new(),
-            usage: Vec::new(),
             planned_tickets: Vec::new(),
             tickets: HashMap::new(),
         }
@@ -1561,26 +1042,8 @@ mod tests {
         assert_eq!(state.revision, 1);
         save_state(&mut state).unwrap();
         assert_eq!(state.revision, 2);
-        save_state(&mut state).unwrap();
-        assert_eq!(state.revision, 3);
         let loaded = load_state(dir.path()).unwrap();
-        assert_eq!(loaded.revision, 3);
-    }
-
-    #[test]
-    fn worker_approval_never_blocks_on_bash() {
-        assert_eq!(
-            approval_args(ApprovalPosture::Safe),
-            vec!["--approval-mode", "always-ask"]
-        );
-        assert_eq!(
-            approval_args(ApprovalPosture::Ask),
-            vec!["--approval-mode", "yolo"]
-        );
-        assert_eq!(
-            approval_args(ApprovalPosture::Unsafe),
-            vec!["--approval-mode", "yolo"]
-        );
+        assert_eq!(loaded.revision, 2);
     }
 
     #[test]
@@ -1608,15 +1071,13 @@ mod tests {
         .unwrap();
         let mut state = test_state(dir.path());
         state.store = store.display().to_string();
-        // Simulate a start killed between claim and save: the store shows a
-        // claim from this run, but the run state never tracked the ticket.
         crate::store::claim_ticket(&store, &ticket.id, &state.run_id, "claim-orphan")
             .unwrap()
             .unwrap();
         let run_dir = PathBuf::from(&state.run_dir);
         std::fs::create_dir_all(&run_dir).unwrap();
         save_state(&mut state).unwrap();
-        stop_run(&run_dir, None::<Box<dyn PaneBackend>>).unwrap();
+        stop_run(&run_dir).unwrap();
         let tickets = crate::store::list_tickets(&store).unwrap();
         assert_eq!(tickets[0].status, crate::schema::TicketStatus::Todo);
         assert!(tickets[0].execution.is_none());

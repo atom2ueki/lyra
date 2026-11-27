@@ -133,17 +133,10 @@ pub fn create_batch(
         if ticket.prompt.trim().is_empty() {
             bail!("ticket {} has an empty prompt", ticket.key);
         }
-        let Some(harness) = ticket.harness.as_deref() else {
-            let available = crate::config::load_config()
-                .and_then(|config| crate::harness::available(&config))
-                .unwrap_or_default()
-                .join(", ");
-            bail!(
-                "ticket {} must name a harness (available: {available})",
-                ticket.key
-            );
-        };
-        crate::harness::resolve(harness)?;
+        // `harness` is a legacy field kept in the schema for imported stores.
+        // 0.7 workers are selected by the project's worker command, not a
+        // per-ticket harness registry.
+        let _ = ticket.harness.as_deref();
         if existing_ids.contains(&ticket.key) {
             bail!(
                 "ticket key {} conflicts with an existing ticket id",
@@ -357,10 +350,8 @@ pub fn update_ticket(store: &Path, id: &str, update: TicketUpdate) -> Result<Tic
     } else if update.clear_labels {
         ticket.labels = Vec::new();
     }
-    if let Some(harness) = &update.harness {
-        crate::harness::resolve(harness)?;
-    }
     if let Some(harness) = update.harness {
+        // Legacy field; 0.7 selects the worker per project.
         ticket.harness = Some(harness);
     }
 

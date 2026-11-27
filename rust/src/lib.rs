@@ -1,22 +1,17 @@
 pub mod acceptance;
 pub mod agent;
 pub mod cli;
+pub mod conductor;
 pub mod config;
 pub mod graph;
-pub mod harness;
-pub mod import;
-pub mod models;
 pub mod names;
 pub mod project;
+pub mod project_config;
+pub mod runner;
 pub mod schema;
+pub mod shell;
 pub mod store;
 pub mod tickets;
-
-pub mod pane;
+pub mod upgrade;
 pub mod worker;
 pub mod worktree;
-
-pub mod conductor;
-pub mod shell;
-
-pub mod upgrade;

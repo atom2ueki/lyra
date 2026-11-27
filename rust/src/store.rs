@@ -327,6 +327,29 @@ pub struct SuspendArgs {
     pub base_head: String,
 }
 
+/// Put a failed ticket back in the ready pool for an explicit retry. The
+/// attempt counter stays in the store; `claim_ticket` increments it again.
+pub fn requeue_ticket(store: &Path, id: &str) -> Result<Option<Ticket>> {
+    let Some(mut ticket) = read_ticket(store, id)? else {
+        return Ok(None);
+    };
+    if ticket.status != TicketStatus::Failed {
+        return Ok(None);
+    }
+    let now = now_iso();
+    ticket.status = TicketStatus::Todo;
+    ticket.execution = None;
+    ticket.last_error = None;
+    ticket.finished_at = None;
+    ticket.updated_at = now;
+    write_ticket(store, &ticket)?;
+    append_event(
+        store,
+        json!({"type": "ticket.requeued", "ticketId": id, "attempts": ticket.attempts}),
+    )?;
+    Ok(Some(ticket))
+}
+
 pub fn suspend_ticket(
     store: &Path,
     id: &str,
