@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lyra — workspace</title>
+<style>
+  :root {
+    --bg: #18181b;
+    --surface: #18181b;
+    --surface-2: #1f1f23;
+    --surface-3: #27272a;
+    --line: #27272a;
+    --line-strong: #3f3f46;
+    --text: #fafaf9;
+    --text-2: #d4d4d8;
+    --muted: #a1a1aa;
+    --dim: #71717a;
+    --accent: #6366f1;
+    --accent-soft: rgba(99, 102, 241, .14);
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --blue: #38bdf8;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter, "Inter Fallback", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .app { display: grid; grid-template-columns: 236px 326px minmax(0, 1fr) 430px; height: 100vh; }
+  .app.no-detail { grid-template-columns: 236px 326px minmax(0, 1fr); }
+  .app.no-detail .detail { display: none; }
+  .app.detail-open { grid-template-columns: 236px minmax(0, 1fr) 420px; }
+  .app.detail-open .activity { display: none; }
+  .sidebar, .activity, .detail { background: var(--surface); min-height: 0; }
+  .sidebar { border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .activity { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+  .main { min-width: 0; display: flex; flex-direction: column; }
+  .detail { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+
+  .logo {
+    height: 58px; display: flex; align-items: center; padding: 0 18px;
+    font-family: var(--mono); font-size: 15px; font-weight: 700; letter-spacing: -.02em;
+  }
+  .logo span { color: var(--accent); }
+  .new-btn {
+    margin: 0 12px 14px; height: 34px; border: 1px solid var(--line);
+    background: var(--surface-2); border-radius: 8px; display: flex; align-items: center;
+    gap: 8px; padding: 0 10px; color: var(--text-2); font-size: 12px; text-align: left;
+  }
+  .new-btn:hover { background: var(--surface-3); border-color: var(--line-strong); }
+  .new-btn .plus { font-size: 17px; line-height: 1; color: var(--muted); }
+  .nav { flex: 1; min-height: 0; overflow: auto; padding: 0 8px; }
+  .nav-title {
+    padding: 14px 10px 5px; color: var(--dim); font-size: 10px; font-weight: 700;
+    letter-spacing: .1em; text-transform: uppercase; display: flex; justify-content: space-between;
+  }
+  .nav-item, .project, .run-item {
+    width: 100%; border: 0; background: transparent; color: var(--text-2);
+    display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 7px;
+    text-align: left; font-size: 12px; min-width: 0;
+  }
+  .nav-item:hover, .project:hover { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { background: var(--surface-3); color: var(--text); }
+  .nav-item .grow, .project .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-item .count, .project .count { color: var(--dim); font-family: var(--mono); font-size: 10px; }
+  .project-icon {
+    width: 17px; height: 17px; border-radius: 5px; display: inline-flex; align-items: center;
+    justify-content: center; font-size: 9px; font-weight: 800; color: #fff; flex-shrink: 0;
+    background: linear-gradient(135deg, #6366f1, #a855f7);
+  }
+  .run-item { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .run-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+  .run-item .dot.awaiting { background: var(--amber); }
+  .run-item .dot.failed { background: var(--red); }
+  .run-item .dot.idle { background: var(--dim); }
+  .sidebar-foot {
+    border-top: 1px solid var(--line); padding: 12px; display: flex; align-items: center; gap: 9px;
+  }
+  .avatar {
+    width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center;
+    justify-content: center; background: linear-gradient(135deg, #6366f1, #a855f7);
+    font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0;
+  }
+  .user { font-size: 12px; color: var(--text); line-height: 1.2; }
+  .muted { color: var(--dim); font-size: 10.5px; }
+  .sidebar-foot .icon-btn { margin-left: auto; }
+
+  .pane-head {
+    height: 58px; display: flex; align-items: center; gap: 8px; padding: 0 14px;
+    border-bottom: 1px solid var(--line); flex-shrink: 0;
+  }
+  .pane-head .title { font-size: 12px; font-weight: 650; }
+  .pane-head .pill { margin-left: auto; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+  .dot.awaiting { background: var(--amber); }
+  .dot.failed { background: var(--red); }
+  .dot.idle { background: var(--dim); }
+  .pill {
+    font-family: var(--mono); font-size: 9.5px; color: var(--muted); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px; white-space: nowrap;
+  }
+  .activity-feed { flex: 1; overflow: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 12px; }
+  .event { display: flex; gap: 8px; align-items: flex-start; }
+  .event .avatar { width: 22px; height: 22px; font-size: 9px; margin-top: 1px; }
+  .event .bubble {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 2px 8px 8px 8px;
+    padding: 8px 10px; color: var(--text-2); font-size: 12px; line-height: 1.45; min-width: 0;
+  }
+  .event .bubble b { color: var(--text); font-weight: 600; }
+  .event .bubble .time { display: block; color: var(--dim); font-size: 9px; margin-top: 4px; font-family: var(--mono); }
+  .event.latest .bubble { border-color: rgba(99,102,241,.45); background: rgba(99,102,241,.08); }
+  .activity-empty { color: var(--dim); font-size: 12px; padding: 8px; }
+  .activity-foot {
+    border-top: 1px solid var(--line); padding: 12px 14px; display: flex; gap: 8px; flex-shrink: 0;
+  }
+
+  .topbar {
+    height: 68px; flex-shrink: 0; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 14px; padding: 0 20px;
+  }
+  .eyebrow { color: var(--dim); font-size: 9px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+  .topbar h1 { margin: 2px 0 0; font-size: 17px; font-weight: 650; letter-spacing: -.02em; }
+  .top-actions { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+  .run-meta { text-align: right; font-family: var(--mono); font-size: 9.5px; color: var(--dim); line-height: 1.4; }
+  .run-meta b { color: var(--text-2); font-weight: 500; }
+  .icon-btn {
+    height: 30px; min-width: 30px; border: 1px solid var(--line); background: var(--surface-2);
+    border-radius: 7px; color: var(--muted); display: inline-flex; align-items: center;
+    justify-content: center; padding: 0 8px; font-size: 13px;
+  }
+  .icon-btn:hover { background: var(--surface-3); color: var(--text); }
+  .primary, .ghost, .danger {
+    height: 30px; border-radius: 7px; border: 1px solid transparent; padding: 0 11px;
+    font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .primary { background: var(--accent); color: #fff; }
+  .primary:hover { background: #4f46e5; }
+  .primary:disabled, .ghost:disabled, .danger:disabled { opacity: .45; cursor: default; }
+  .ghost { background: var(--surface-2); border-color: var(--line); color: var(--text-2); }
+  .ghost:hover { background: var(--surface-3); }
+  .danger { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.3); color: #f87171; }
+  .danger:hover { background: rgba(239,68,68,.14); }
+
+  .board-wrap { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 18px; }
+  .board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; height: 100%; min-height: 420px; }
+  .column {
+    min-width: 0; border: 1px solid var(--line); border-radius: 11px; background: rgba(24,24,27,.55);
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .column.needs { border-color: rgba(245,158,11,.22); background: linear-gradient(180deg, rgba(245,158,11,.035), rgba(24,24,27,.55)); }
+  .col-head {
+    height: 38px; flex-shrink: 0; display: flex; align-items: center; gap: 7px; padding: 0 11px;
+    border-bottom: 1px solid var(--line); color: var(--text-2); font-size: 10px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .col-head .n { margin-left: auto; color: var(--dim); font-family: var(--mono); font-size: 9.5px; font-weight: 500; }
+  .col-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; overflow: auto; flex: 1; }
+  .empty { color: var(--dim); font-size: 11px; padding: 10px 8px; }
+  .card {
+    width: 100%; text-align: left; border: 1px solid var(--line); background: var(--surface-2);
+    border-radius: 9px; padding: 9px 10px; color: var(--text); display: block;
+    transition: border-color .12s ease, background .12s ease;
+  }
+  .card:hover { border-color: var(--line-strong); background: #232327; }
+  .card.selected { border-color: rgba(99,102,241,.7); box-shadow: 0 0 0 1px rgba(99,102,241,.18) inset; }
+  .card .topline { display: flex; align-items: center; gap: 6px; color: var(--dim); font-family: var(--mono); font-size: 9.5px; }
+  .card .id { color: var(--muted); }
+  .card .title { font-size: 12px; font-weight: 600; line-height: 1.35; margin: 4px 0 6px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .card .meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--dim); font-size: 9.5px; }
+  .tag {
+    font-size: 8.5px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted);
+    background: rgba(255,255,255,.02); white-space: nowrap;
+  }
+  .tag.ready { color: var(--green); border-color: rgba(34,197,94,.25); background: rgba(34,197,94,.05); }
+  .tag.warn { color: var(--amber); border-color: rgba(245,158,11,.25); background: rgba(245,158,11,.05); }
+  .tag.bad { color: var(--red); border-color: rgba(239,68,68,.25); background: rgba(239,68,68,.05); }
+  .tag.blue { color: #7dd3fc; border-color: rgba(56,189,248,.25); background: rgba(56,189,248,.05); }
+  .card.done { opacity: .55; }
+  .card.need { border-color: rgba(245,158,11,.35); }
+  .card.fail { border-color: rgba(239,68,68,.35); }
+  .avatar-mini {
+    width: 13px; height: 13px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #a855f7);
+    display: inline-block; flex-shrink: 0;
+  }
+
+  .detail-head { padding: 16px 16px 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  .detail-head .row { display: flex; align-items: flex-start; gap: 8px; }
+  .detail-head .id { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+  .detail-head h2 { margin: 3px 0 0; font-size: 15px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em; }
+  .detail-head .close { margin-left: auto; }
+  .detail-sub { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; overflow: auto; }
+  .tab {
+    border: 0; background: transparent; color: var(--dim); font-size: 11px; padding: 9px 8px 8px;
+    border-bottom: 1px solid transparent; white-space: nowrap;
+  }
+  .tab:hover { color: var(--text-2); }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .detail-body { flex: 1; overflow: auto; padding: 14px 16px; min-height: 0; }
+  .detail-body h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .kv { display: grid; grid-template-columns: 92px 1fr; gap: 4px 10px; font-size: 11.5px; margin-bottom: 12px; }
+  .kv .k { color: var(--dim); }
+  .kv .v { color: var(--text-2); min-width: 0; overflow-wrap: anywhere; }
+  .spec { white-space: pre-wrap; color: var(--text-2); font-size: 12px; line-height: 1.55; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  pre.code {
+    margin: 0; background: #111113; border: 1px solid var(--line); border-radius: 8px; padding: 11px;
+    color: #d4d4d8; font-family: var(--mono); font-size: 10.5px; line-height: 1.55;
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: none;
+  }
+  .diff-add { color: #86efac; background: rgba(34,197,94,.06); display: block; }
+  .diff-del { color: #fca5a5; background: rgba(239,68,68,.06); display: block; }
+  .diff-meta { color: var(--dim); display: block; }
+  .mutedtext { color: var(--dim); font-size: 11.5px; }
+  .error-box { border: 1px solid rgba(239,68,68,.3); background: rgba(239,68,68,.06); color: #fca5a5; border-radius: 8px; padding: 9px 10px; font-size: 11.5px; white-space: pre-wrap; }
+  .gate-bar { border-top: 1px solid var(--line); padding: 11px 14px 13px; flex-shrink: 0; background: var(--surface); }
+  .gate-note { width: 100%; min-height: 50px; resize: vertical; background: #111113; border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; color: var(--text-2); font-size: 11px; outline: none; }
+  .gate-note:focus { border-color: rgba(99,102,241,.6); }
+  .gate-actions { display: flex; gap: 7px; margin-top: 8px; flex-wrap: wrap; }
+  .gate-actions .primary, .gate-actions .ghost, .gate-actions .danger { flex: 1; min-width: 84px; }
+
+  .modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center;
+    justify-content: center; z-index: 20; padding: 20px;
+  }
+  .modal.show { display: flex; }
+  .modal-card { width: min(520px, 100%); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 12px; padding: 18px; box-shadow: 0 24px 60px -20px rgba(0,0,0,.8); }
+  .modal-card h2 { margin: 0 0 12px; font-size: 16px; }
+  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .field label { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
+  .field input, .field textarea {
+    background: #111113; border: 1px solid var(--line); border-radius: 7px; padding: 8px 9px;
+    color: var(--text); outline: none; font-size: 12px;
+  }
+  .field input:focus, .field textarea:focus { border-color: rgba(99,102,241,.6); }
+  .field textarea { min-height: 86px; resize: vertical; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .toast {
+    position: fixed; right: 20px; bottom: 18px; z-index: 30; max-width: 420px;
+    background: #27272a; border: 1px solid var(--line-strong); border-radius: 8px;
+    padding: 9px 12px; color: var(--text-2); font-size: 11.5px; display: none;
+    box-shadow: 0 16px 40px -18px rgba(0,0,0,.8); white-space: pre-wrap;
+  }
+  .toast.show { display: block; }
+  .toast.err { border-color: rgba(239,68,68,.4); color: #fca5a5; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 99px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  @media (max-width: 1150px) {
+    .app, .app.detail-open { grid-template-columns: 220px minmax(0,1fr) 390px; }
+    .activity { display: none; }
+    .app.no-detail { grid-template-columns: 220px minmax(0,1fr); }
+  }
+  @media (max-width: 800px) {
+    .app, .app.no-detail { grid-template-columns: minmax(0,1fr); }
+    .sidebar { display: none; }
+    .detail { position: fixed; inset: 0; z-index: 10; }
+    .board { grid-template-columns: 1fr; height: auto; }
+    .board-wrap { padding: 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="app no-detail" id="app">
+  <aside class="sidebar">
+    <div class="logo">[lyra<span>]</span></div>
+    <button class="new-btn" id="newBtn"><span class="plus">+</span> New ticket</button>
+    <div class="nav">
+      <div class="nav-title">Projects</div>
+      <div class="project active" title="Current project">
+        <span class="project-icon" id="projectIcon">L</span>
+        <span class="grow" id="projectName">project</span>
+        <span class="count" id="projectCount">0</span>
+      </div>
+      <div class="nav-title">Runs</div>
+      <div id="runList"></div>
+      <div class="nav-title">Workspace</div>
+      <div class="nav-item active">Tickets <span class="count" id="ticketCount">0</span></div>
+    </div>
+    <div class="sidebar-foot">
+      <span class="avatar">L</span>
+      <div><div class="user">local</div><div class="muted">workspace</div></div>
+      <button class="icon-btn" id="refreshBtn" title="Refresh">↻</button>
+    </div>
+  </aside>
+
+  <section class="activity">
+    <div class="pane-head">
+      <span class="dot idle" id="runDot"></span>
+      <span class="title">Run activity</span>
+      <span class="pill" id="runStatus">idle</span>
+    </div>
+    <div class="activity-feed" id="activityFeed">
+      <div class="activity-empty">No run yet. Start a run to see activity.</div>
+    </div>
+    <div class="activity-foot">
+      <button class="primary" id="startBtn">Start run</button>
+      <button class="ghost" id="closeBtn">Close run</button>
+    </div>
+  </section>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Workspace</div>
+        <h1 id="projectTitle">project</h1>
+      </div>
+      <div class="top-actions">
+        <div class="run-meta" id="runMeta">No run</div>
+        <button class="icon-btn" id="refreshTop" title="Refresh">↻</button>
+      </div>
+    </header>
+    <div class="board-wrap">
+      <div class="board">
+        <section class="column" data-col="backlog">
+          <div class="col-head">Backlog <span class="n" id="count-backlog">0</span></div>
+          <div class="col-body" id="col-backlog"></div>
+        </section>
+        <section class="column" data-col="running">
+          <div class="col-head">In progress <span class="n" id="count-running">0</span></div>
+          <div class="col-body" id="col-running"></div>
+        </section>
+        <section class="column needs" data-col="needs">
+          <div class="col-head">Needs you <span class="n" id="count-needs">0</span></div>
+          <div class="col-body" id="col-needs"></div>
+        </section>
+        <section class="column" data-col="done">
+          <div class="col-head">Done <span class="n" id="count-done">0</span></div>
+          <div class="col-body" id="col-done"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <aside class="detail" id="detail">
+    <div class="detail-head">
+      <div class="row">
+        <div>
+          <div class="id" id="detailId">#—</div>
+          <h2 id="detailTitle">Select a ticket</h2>
+        </div>
+        <button class="icon-btn close" id="closeDetail" title="Close">×</button>
+      </div>
+      <div class="detail-sub" id="detailSub"></div>
+    </div>
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-tab="overview">Overview</button>
+      <button class="tab" data-tab="plan">Plan</button>
+      <button class="tab" data-tab="changes">Changes</button>
+      <button class="tab" data-tab="result">Result</button>
+      <button class="tab" data-tab="artifact">Artifact</button>
+      <button class="tab" data-tab="log">Log</button>
+    </div>
+    <div class="detail-body" id="detailBody"><div class="mutedtext">Click a card to inspect it.</div></div>
+    <div class="gate-bar" id="gateBar"></div>
+  </aside>
+</div>
+
+<div class="modal" id="newModal">
+  <div class="modal-card">
+    <h2>New ticket</h2>
+    <div class="field"><label>Subject</label><input id="newSubject" placeholder="Add rate limiting to login"></div>
+    <div class="field"><label>Prompt</label><textarea id="newPrompt" placeholder="What should the worker do?"></textarea></div>
+    <div class="field"><label>Blocked by (optional, comma-separated ticket ids)</label><input id="newBlocked" placeholder="QuietHarbor, SwiftFalcon"></div>
+    <div class="field"><label>Priority (0–4)</label><input id="newPriority" type="number" min="0" max="4" value="2"></div>
+    <div class="modal-actions">
+      <button class="ghost" id="cancelNew">Cancel</button>
+      <button class="primary" id="createNew">Create ticket</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const app = document.getElementById('app');
+  const state = { data: null, selected: null, detail: null, tab: 'overview', busy: false };
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const mono = (value) => `<code>${esc(value)}</code>`;
+
+  function toast(message, error = false) {
+    const el = $('toast');
+    el.textContent = message;
+    el.className = 'toast show' + (error ? ' err' : '');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.className = 'toast'; }, error ? 6000 : 3000);
+  }
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok || value.ok === false) {
+      throw new Error(value?.error?.message || `HTTP ${response.status}`);
+    }
+    return value;
+  }
+
+  function statusOf(ticket) {
+    return ticket.run?.status || ticket.status || 'todo';
+  }
+
+  function columnOf(ticket) {
+    const status = statusOf(ticket);
+    if (ticket.status === 'done' || status === 'done') return 'done';
+    if (['awaiting_plan', 'awaiting_review', 'awaitingplan', 'awaitingreview', 'blocked', 'failed'].includes(status) || ticket.status === 'failed') return 'needs';
+    if (['starting', 'running'].includes(status)) return 'running';
+    return 'backlog';
+  }
+
+  function statusLabel(status) {
+    return ({
+      todo: 'Backlog', in_progress: 'In progress', done: 'Done', failed: 'Failed',
+      starting: 'Starting', running: 'Running', awaiting_plan: 'Plan ready',
+      awaiting_review: 'Review ready', blocked: 'Needs input', stopped: 'Stopped',
+      planned: 'Planned', awaiting: 'Awaiting', idle: 'Idle',
+    })[status] || status;
+  }
+
+  function statusClass(status) {
+    if (status === 'failed' || status === 'merge_conflict') return 'bad';
+    if (status === 'awaiting_plan' || status === 'awaiting_review' || status === 'blocked') return 'warn';
+    if (status === 'running' || status === 'starting') return 'blue';
+    if (status === 'done') return 'ready';
+    return '';
+  }
+
+  function timeAgo(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  }
+
+  function cardHtml(ticket, column) {
+    const status = statusOf(ticket);
+    const tags = [];
+    if (ticket.ready && column === 'backlog') tags.push('<span class="tag ready">ready</span>');
+    if (ticket.blockedBy?.length && !ticket.ready) tags.push(`<span class="tag warn">blocked by ${esc(ticket.blockedBy.join(', '))}</span>`);
+    if (ticket.labels?.length) tags.push(`<span class="tag">${esc(ticket.labels.join(' · '))}</span>`);
+    if (status === 'failed') tags.push('<span class="tag bad">failed</span>');
+    if (status === 'awaiting_plan') tags.push('<span class="tag warn">plan</span>');
+    if (status === 'awaiting_review') tags.push('<span class="tag warn">review</span>');
+    if (status === 'blocked') tags.push('<span class="tag warn">needs input</span>');
+    const phase = ticket.run?.phase && !['done', 'failed', 'blocked'].includes(ticket.run.phase)
+      ? ticket.run.phase
+      : statusLabel(status);
+    return `<button class="card ${column === 'needs' ? 'need' : ''} ${status === 'failed' ? 'fail' : ''} ${column === 'done' ? 'done' : ''} ${state.selected === ticket.id ? 'selected' : ''}" data-id="${esc(ticket.id)}">
+      <div class="topline"><span class="id">#${esc(ticket.id)}</span><span>${esc(ticket.run?.attempt ? `attempt ${ticket.run.attempt}` : '')}</span></div>
+      <div class="title">${esc(ticket.subject)}</div>
+      <div class="meta"><span class="avatar-mini"></span><span>${esc(phase)}</span>${tags.join('')}<span style="margin-left:auto">${esc(timeAgo(ticket.run?.startedAt || ticket.updatedAt))}</span></div>
+    </button>`;
+  }
+
+  function renderBoard() {
+    const data = state.data;
+    if (!data) return;
+    const groups = { backlog: [], running: [], needs: [], done: [] };
+    const tickets = [...(data.tickets || [])].sort((a, b) => {
+      const p = (a.priority ?? 2) - (b.priority ?? 2);
+      return p || String(a.id).localeCompare(String(b.id));
+    });
+    for (const ticket of tickets) groups[columnOf(ticket)].push(ticket);
+    for (const [column, items] of Object.entries(groups)) {
+      const body = $('col-' + column);
+      body.innerHTML = items.length ? items.map(ticket => cardHtml(ticket, column)).join('') : '<div class="empty">Nothing here.</div>';
+      $('count-' + column).textContent = items.length;
+    }
+    $('ticketCount').textContent = tickets.length;
+    $('projectCount').textContent = tickets.length;
+    $('projectName').textContent = (data.project?.root || 'project').split('/').filter(Boolean).pop() || 'project';
+    $('projectTitle').textContent = (data.project?.root || 'project').split('/').filter(Boolean).pop() || 'project';
+    $('projectIcon').textContent = ($('projectName').textContent[0] || 'L').toUpperCase();
+    const run = data.run;
+    $('runStatus').textContent = statusLabel(run?.status || 'idle');
+    $('runDot').className = 'dot ' + (run?.status === 'failed' ? 'failed' : run?.status === 'awaiting' ? 'awaiting' : run?.status === 'running' ? '' : 'idle');
+    $('runMeta').innerHTML = run ? `<b>${esc(run.runId)}</b><br>${esc(statusLabel(run.status))} · ${esc(run.baseRef)}` : 'No run';
+    $('runList').innerHTML = (data.runs || []).length
+      ? data.runs.map((id, index) => `<div class="run-item" title="${esc(id)}"><span class="dot ${index === 0 && run?.status === 'awaiting' ? 'awaiting' : index === 0 && run?.status === 'running' ? '' : 'idle'}"></span><span class="grow">${esc(id)}</span></div>`).join('')
+      : '<div class="empty" style="padding-left:9px">No runs yet.</div>';
+    renderActivity(run);
+    $('startBtn').disabled = !!run && ['running', 'awaiting'].includes(run.status);
+    $('closeBtn').disabled = !run;
+  }
+
+  function renderActivity(run) {
+    const feed = $('activityFeed');
+    if (!run) {
+      feed.innerHTML = '<div class="activity-empty">No run yet. Start a run to see activity.</div>';
+      return;
+    }
+    const events = [];
+    for (const [id, ticket] of Object.entries(run.tickets || {})) {
+      const status = ticket.status;
+      let text = '';
+      if (status === 'awaiting_plan') text = `<b>Plan ready for #${esc(id)}.</b> Review PLAN.md, then approve or request changes.`;
+      else if (status === 'awaiting_review') text = `<b>Changes ready for #${esc(id)}.</b> Review the diff, then approve and merge.`;
+      else if (status === 'blocked') text = `<b>#${esc(id)} needs you.</b> ${esc(ticket.detail || 'The worker is parked.')}`;
+      else if (status === 'failed') text = `<b>#${esc(id)} failed.</b> ${esc(ticket.error || 'It will be retried.')}`;
+      else if (status === 'running') text = `<b>#${esc(id)} is working.</b> ${esc(ticket.phase || 'worker running')}${ticket.attempt ? ` · attempt ${ticket.attempt}` : ''}.`;
+      else if (status === 'done') text = `<b>#${esc(id)} is done.</b> Changes are merged into ${esc(run.baseRef)}.`;
+      if (text) events.push({ when: ticket.finishedAt || ticket.startedAt || '', text, status });
+    }
+    events.sort((a, b) => String(a.when).localeCompare(String(b.when)));
+    const latest = events.length ? events[events.length - 1] : null;
+    const html = [`<div class="event"><span class="avatar">L</span><div class="bubble"><b>Run ${esc(run.runId)}.</b> ${esc(statusLabel(run.status))}.<span class="time">${esc(run.createdAt ? timeAgo(run.createdAt) : '')}</span></div></div>`];
+    for (const event of events.slice(-12)) {
+      html.push(`<div class="event ${latest === event ? 'latest' : ''}"><span class="avatar">W</span><div class="bubble">${event.text}<span class="time">${esc(timeAgo(event.when))}</span></div></div>`);
+    }
+    if (run.status === 'awaiting') {
+      html.push('<div class="activity-empty">Open a card in “Needs you” to approve or reject.</div>');
+    }
+    feed.innerHTML = html.join('');
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  async function refresh() {
+    try {
+      const data = await api('/api/state');
+      state.data = data;
+      renderBoard();
+      if (state.selected) {
+        const still = (data.tickets || []).some(ticket => ticket.id === state.selected);
+        if (!still) closeDetail();
+        else if (!['TEXTAREA', 'INPUT'].includes(document.activeElement?.tagName)) {
+          await loadDetail(state.selected);
+        }
+      }
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+  }
+
+  function closeDetail() {
+    state.selected = null;
+    state.detail = null;
+    app.classList.add('no-detail');
+    app.classList.remove('detail-open');
+    document.querySelectorAll('.card.selected').forEach(el => el.classList.remove('selected'));
+  }
+
+  async function openTicket(id) {
+    state.selected = id;
+    state.tab = 'overview';
+    app.classList.remove('no-detail');
+    app.classList.add('detail-open');
+    document.querySelectorAll('.card').forEach(el => el.classList.toggle('selected', el.dataset.id === id));
+    await loadDetail(id);
+  }
+
+  async function loadDetail(id) {
+    try {
+      const detail = await api('/api/ticket?ticket=' + encodeURIComponent(id));
+      if (state.selected !== id) return;
+      state.detail = detail;
+      renderDetail();
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+  }
+
+  function renderDetail() {
+    const detail = state.detail;
+    if (!detail) return;
+    const ticket = detail.ticket;
+    const run = detail.run;
+    const artifacts = detail.artifacts || {};
+    const status = run?.status || ticket.status;
+    $('detailId').textContent = '#' + ticket.id;
+    $('detailTitle').textContent = ticket.subject;
+    $('detailSub').innerHTML = `<span class="tag ${statusClass(status)}">${esc(statusLabel(status))}</span>${ticket.blockedBy?.length ? `<span class="tag warn">blocked by ${esc(ticket.blockedBy.join(', '))}</span>` : ''}${ticket.labels?.map(label => `<span class="tag">${esc(label)}</span>`).join('') || ''}`;
+    document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.tab === state.tab));
+    const body = $('detailBody');
+    if (state.tab === 'overview') {
+      body.innerHTML = `
+        <h3>Task</h3>
+        <div class="spec">${esc(ticket.prompt || '(no prompt)')}</div>
+        ${ticket.acceptance ? `<h3 style="margin-top:14px">Acceptance</h3><div class="spec">${esc(ticket.acceptance)}</div>` : ''}
+        <h3 style="margin-top:14px">Run</h3>
+        <div class="kv">
+          <div class="k">Status</div><div class="v">${esc(statusLabel(status))}</div>
+          <div class="k">Phase</div><div class="v">${esc(run?.phase || '—')}</div>
+          <div class="k">Attempt</div><div class="v">${esc(run?.attempt ?? '—')}</div>
+          <div class="k">Branch</div><div class="v">${mono(run?.branch || '—')}</div>
+          <div class="k">Base</div><div class="v">${mono(run?.baseHead || '—')}</div>
+          <div class="k">Exit code</div><div class="v">${esc(run?.exitCode ?? '—')}</div>
+          <div class="k">Run</div><div class="v">${mono(detail.runId || '—')}</div>
+        </div>
+        ${run?.error ? `<div class="error-box">${esc(run.error)}</div>` : ''}
+        <h3 style="margin-top:14px">Dependencies</h3>
+        <div class="mutedtext">${ticket.blockedBy?.length ? esc(ticket.blockedBy.join(', ')) : 'None'}</div>`;
+    } else if (state.tab === 'plan') {
+      body.innerHTML = artifacts.plan ? `<pre class="code">${esc(artifacts.plan)}</pre>` : '<div class="mutedtext">No PLAN.md yet. If the project has a plan command, approve the plan gate or start a run.</div>';
+    } else if (state.tab === 'changes') {
+      body.innerHTML = artifacts.diff ? `<pre class="code">${diffHtml(artifacts.diff)}</pre>` : '<div class="mutedtext">No DIFF.patch yet. Build a ticket first.</div>';
+    } else if (state.tab === 'result') {
+      body.innerHTML = artifacts.result ? `<pre class="code">${esc(artifacts.result)}</pre>` : '<div class="mutedtext">No RESULT.md yet.</div>';
+    } else if (state.tab === 'artifact') {
+      body.innerHTML = artifacts.artifact ? `<pre class="code">${esc(JSON.stringify(artifacts.artifact, null, 2))}</pre>` : '<div class="mutedtext">No ARTIFACT.json yet.</div>';
+    } else if (state.tab === 'log') {
+      body.innerHTML = artifacts.log ? `<pre class="code">${esc(artifacts.log)}</pre>` : '<div class="mutedtext">No worker log yet.</div>';
+    }
+    renderGate(ticket, run);
+  }
+
+  function diffHtml(diff) {
+    return diff.split('\n').map(line => {
+      if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) return `<span class="diff-meta">${esc(line)}</span>`;
+      if (line.startsWith('+')) return `<span class="diff-add">${esc(line)}</span>`;
+      if (line.startsWith('-')) return `<span class="diff-del">${esc(line)}</span>`;
+      return esc(line);
+    }).join('');
+  }
+
+  function renderGate(ticket, run) {
+    const bar = $('gateBar');
+    const status = run?.status;
+    if (status === 'awaiting_plan') {
+      bar.innerHTML = `<textarea class="gate-note" id="gateNote" placeholder="Optional feedback for the plan…"></textarea>
+        <div class="gate-actions"><button class="primary" id="approvePlan">Approve plan</button><button class="danger" id="rejectGate">Reject plan</button></div>`;
+      $('approvePlan').onclick = () => gate('approve', ticket.id, true);
+      $('rejectGate').onclick = () => gate('reject', ticket.id, true);
+    } else if (status === 'awaiting_review') {
+      bar.innerHTML = `<textarea class="gate-note" id="gateNote" placeholder="Optional feedback for the changes…"></textarea>
+        <div class="gate-actions"><button class="primary" id="approveMerge">Approve &amp; merge</button><button class="ghost" id="approveNoMerge">Approve without merge</button><button class="danger" id="rejectGate">Reject changes</button></div>`;
+      $('approveMerge').onclick = () => gate('approve', ticket.id, true);
+      $('approveNoMerge').onclick = () => gate('approve', ticket.id, false);
+      $('rejectGate').onclick = () => gate('reject', ticket.id, true);
+    } else if (status === 'merge_conflict') {
+      bar.innerHTML = `<div class="error-box">Merge conflict. Resolve it on the base branch, then reject and rebuild, or fix it manually.</div>
+        <div class="gate-actions"><button class="danger" id="rejectGate">Reject &amp; rebuild</button></div>`;
+      $('rejectGate').onclick = () => gate('reject', ticket.id, true);
+    } else if (status === 'failed') {
+      bar.innerHTML = `<div class="mutedtext">The conductor will retry this ticket automatically while attempts remain.</div>`;
+    } else if (status === 'blocked') {
+      bar.innerHTML = `<div class="mutedtext">${esc(run?.detail || 'This ticket is parked until the blocker or input is resolved.')}</div>`;
+    } else {
+      bar.innerHTML = `<div class="mutedtext">${run ? 'No gate is open for this ticket.' : 'Start a run to launch this ticket.'}</div>`;
+    }
+  }
+
+  async function gate(action, ticket, merge) {
+    if (state.busy) return;
+    state.busy = true;
+    try {
+      const note = $('gateNote')?.value?.trim();
+      const body = action === 'approve' ? { ticket, merge } : { ticket, note: note || 'changes requested' };
+      await api('/api/' + action, { method: 'POST', body: JSON.stringify(body) });
+      toast(action === 'approve' ? 'Gate approved.' : 'Sent back with feedback.');
+      await refresh();
+      if (state.selected) await loadDetail(state.selected);
+    } catch (error) {
+      toast(String(error.message || error), true);
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  async function startRun() {
+    if (state.busy) return;
+    state.busy = true;
+    try {
+      const result = await api('/api/start', { method: 'POST', body: '{}' });
+      toast(`Started ${result.run?.runId || 'run'}.`);
+      await refresh();
+    } catch (error) {
+      toast(String(error.message || error), true);
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  async function closeRun() {
+    if (!confirm('Close the current run and remove clean worktrees?')) return;
+    try {
+      await api('/api/close', { method: 'POST', body: '{}' });
+      toast('Run closed.');
+      await refresh();
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+  }
+
+  function newTicketModal(show) {
+    $('newModal').classList.toggle('show', show);
+    if (show) setTimeout(() => $('newSubject').focus(), 30);
+  }
+
+  async function createTicket() {
+    const subject = $('newSubject').value.trim();
+    if (!subject) return toast('Subject is required.', true);
+    const blockedBy = $('newBlocked').value.split(',').map(s => s.trim()).filter(Boolean);
+    try {
+      await api('/api/tickets', {
+        method: 'POST',
+        body: JSON.stringify({
+          subject,
+          prompt: $('newPrompt').value.trim() || subject,
+          blockedBy,
+          priority: Number($('newPriority').value || 2),
+        }),
+      });
+      newTicketModal(false);
+      $('newSubject').value = '';
+      $('newPrompt').value = '';
+      $('newBlocked').value = '';
+      toast('Ticket created.');
+      await refresh();
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+  }
+
+  document.addEventListener('click', (event) => {
+    const card = event.target.closest('.card');
+    if (card) openTicket(card.dataset.id);
+  });
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      state.tab = tab.dataset.tab;
+      renderDetail();
+    });
+  });
+  $('closeDetail').onclick = closeDetail;
+  $('newBtn').onclick = () => newTicketModal(true);
+  $('cancelNew').onclick = () => newTicketModal(false);
+  $('createNew').onclick = createTicket;
+  $('startBtn').onclick = startRun;
+  $('closeBtn').onclick = closeRun;
+  $('refreshBtn').onclick = refresh;
+  $('refreshTop').onclick = refresh;
+  $('newModal').addEventListener('click', (event) => { if (event.target === $('newModal')) newTicketModal(false); });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { newTicketModal(false); closeDetail(); }
+  });
+  refresh();
+  setInterval(refresh, 1000);
+})();
+</script>
+</body>
+</html>
