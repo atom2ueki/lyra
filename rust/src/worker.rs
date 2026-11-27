@@ -21,6 +21,9 @@ pub struct WorkerPaths {
     pub result_md: PathBuf,
     pub result_json: PathBuf,
     pub diff: PathBuf,
+    pub artifact: PathBuf,
+    pub artifacts: PathBuf,
+    pub feedback: PathBuf,
     pub state: PathBuf,
     pub log: PathBuf,
 }
@@ -35,6 +38,9 @@ impl WorkerPaths {
             result_md: root.join("RESULT.md"),
             result_json: root.join("result.json"),
             diff: root.join("DIFF.patch"),
+            artifact: root.join("ARTIFACT.json"),
+            artifacts: root.join("artifacts"),
+            feedback: root.join("FEEDBACK.md"),
             state: root.join("state.json"),
             log: root.join("worker.log"),
             root,
@@ -97,11 +103,26 @@ pub fn write_plan_brief(paths: &WorkerPaths, body: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn write_feedback(paths: &WorkerPaths, note: &str) -> Result<()> {
+    paths.ensure()?;
+    fs::write(&paths.feedback, note)
+        .with_context(|| format!("write {}", paths.feedback.display()))?;
+    Ok(())
+}
+
+fn feedback_block(feedback: Option<&str>) -> String {
+    match feedback.map(str::trim).filter(|note| !note.is_empty()) {
+        Some(note) => format!("\n## Reviewer feedback\n\n{note}\n\nAddress this in this phase.\n"),
+        None => String::new(),
+    }
+}
+
 pub fn render_task_brief(
     ticket: &Ticket,
     worktree: &Path,
     prompt_file: &Path,
     result_file: &Path,
+    feedback: Option<&str>,
 ) -> String {
     format!(
         "# Lyra worker: {id}\n\n\
@@ -114,23 +135,34 @@ pub fn render_task_brief(
          status: done|blocked|failed|needs_input\n\
          summary: <what changed, or what you need>\n\
          verification: <checks you actually ran>\n\
-         blockers: <comma-separated ticket ids, blocked only>\n",
+         blockers: <comma-separated ticket ids, blocked only>\n{feedback}",
         id = ticket.id,
         worktree = worktree.display(),
         prompt = prompt_file.display(),
         result = result_file.display(),
+        feedback = feedback_block(feedback),
     )
 }
 
-pub fn render_plan_brief(ticket: &Ticket, worktree: &Path, plan_file: &Path) -> String {
+pub fn render_plan_brief(
+    ticket: &Ticket,
+    worktree: &Path,
+    prompt_file: &Path,
+    plan_file: &Path,
+    result_file: &Path,
+    feedback: Option<&str>,
+) -> String {
     format!(
         "# Lyra plan task: {id}\n\n\
-         Read the task in {worktree} and write an implementation plan to {plan}.\n\
+         Read {prompt} in {worktree} and write an implementation plan to {plan}.\n\
          Do not modify code. Include files, steps, risks, and verification.\n\
-         When done, write status: done and a one-line summary to RESULT.md.\n",
+         When done, write {result} with status: done and a one-line summary.\n{feedback}",
         id = ticket.id,
+        prompt = prompt_file.display(),
         worktree = worktree.display(),
         plan = plan_file.display(),
+        result = result_file.display(),
+        feedback = feedback_block(feedback),
     )
 }
 

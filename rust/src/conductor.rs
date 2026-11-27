@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -14,11 +15,10 @@ use crate::project_config::ProjectConfig;
 use crate::runner::{self, WorkerHandle};
 use crate::schema::{Ticket, TicketStatus, now_iso, ready_tickets, validate_graph};
 use crate::store::{
-    SuspendArgs, claim_ticket, finish_ticket, list_tickets, release_ticket, suspend_ticket,
+    SuspendArgs, claim_ticket, finish_ticket, list_tickets, read_ticket, release_ticket,
+    suspend_ticket,
 };
-use crate::worker::{
-    WorkerPaths, WorkerResultStatus, read_result, read_state, render_task_brief, write_task_brief,
-};
+use crate::worker::{WorkerPaths, WorkerResultStatus, read_result, read_state};
 use crate::worktree::{
     WorktreeInfo, close_run_worktrees, create_worktree, detect_base_ref, resume_worktree,
 };
@@ -27,11 +27,17 @@ use crate::worktree::{
 /// left failed. Retry is always explicit: the same worktree, the same branch.
 pub const MAX_ATTEMPTS: u32 = 3;
 
+pub const PHASE_PLANNING: &str = "planning";
+pub const PHASE_AWAITING_PLAN: &str = "awaiting_plan";
+pub const PHASE_BUILDING: &str = "building";
+pub const PHASE_AWAITING_REVIEW: &str = "awaiting_review";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
     Planned,
     Running,
+    Awaiting,
     Done,
     Blocked,
     Stopped,
@@ -43,6 +49,8 @@ pub enum RunStatus {
 pub enum RunTicketStatus {
     Starting,
     Running,
+    AwaitingPlan,
+    AwaitingReview,
     Done,
     Blocked,
     Failed,
@@ -54,6 +62,8 @@ impl RunTicketStatus {
         match self {
             Self::Starting => "starting",
             Self::Running => "running",
+            Self::AwaitingPlan => "awaiting_plan",
+            Self::AwaitingReview => "awaiting_review",
             Self::Done => "done",
             Self::Blocked => "blocked",
             Self::Failed => "failed",
@@ -82,6 +92,12 @@ pub struct RunTicketState {
     pub finished_at: Option<String>,
     #[serde(default)]
     pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker: Option<WorkerHandle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -234,6 +250,7 @@ fn worker_env(
     claim_id: &str,
     worktree: &Path,
     paths: &WorkerPaths,
+    phase: &str,
     attempt: u32,
 ) -> HashMap<String, String> {
     let mut env = state.worker_env.clone();
@@ -242,6 +259,7 @@ fn worker_env(
     env.insert("LYRA_TICKET_SUBJECT".to_string(), subject.to_string());
     env.insert("LYRA_CLAIM_ID".to_string(), claim_id.to_string());
     env.insert("LYRA_WORKTREE".to_string(), worktree.display().to_string());
+    env.insert("LYRA_PHASE".to_string(), phase.to_string());
     env.insert(
         "LYRA_PROMPT_FILE".to_string(),
         paths.prompt.display().to_string(),
@@ -262,6 +280,151 @@ fn worker_env(
     env
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Plan,
+    Build,
+}
+
+impl Phase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Build => "build",
+        }
+    }
+
+    fn run_phase(self) -> &'static str {
+        match self {
+            Self::Plan => PHASE_PLANNING,
+            Self::Build => PHASE_BUILDING,
+        }
+    }
+}
+
+fn phase_command(state: &RunState, phase: Phase) -> Result<Vec<String>> {
+    match phase {
+        Phase::Plan => state
+            .worker_plan
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("worker.plan is not configured")),
+        Phase::Build => Ok(state.worker_build.clone()),
+    }
+}
+
+fn spawn_phase(
+    state: &mut RunState,
+    ticket_id: &str,
+    phase: Phase,
+    feedback: Option<&str>,
+) -> Result<()> {
+    let run_ticket = state
+        .tickets
+        .get(ticket_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} is not in run state"))?;
+    let ticket = read_ticket(Path::new(&state.store), ticket_id)?
+        .ok_or_else(|| anyhow::anyhow!("unknown ticket: {ticket_id}"))?;
+    let worktree = PathBuf::from(&run_ticket.worktree);
+    let paths = WorkerPaths::new(Path::new(&state.run_dir), ticket_id);
+    let _ = fs::remove_file(&paths.result_md);
+    let _ = fs::remove_file(&paths.result_json);
+    let _ = fs::remove_file(&paths.diff);
+    let _ = fs::remove_file(&paths.artifact);
+    if phase == Phase::Plan {
+        let _ = fs::remove_file(&paths.plan);
+    }
+    if let Some(note) = feedback {
+        crate::worker::write_feedback(&paths, note)?;
+    }
+    let command = match phase {
+        Phase::Plan => {
+            let command = phase_command(state, phase)?;
+            let brief = crate::worker::render_plan_brief(
+                &ticket,
+                &worktree,
+                &paths.prompt,
+                &paths.plan,
+                &paths.result_md,
+                feedback,
+            );
+            crate::worker::write_plan_brief(&paths, &brief)?;
+            crate::project_config::expand_command(
+                &command,
+                &paths.plan_prompt,
+                Some(&paths.plan),
+                &worktree,
+                ticket_id,
+            )
+        }
+        Phase::Build => {
+            let command = phase_command(state, phase)?;
+            let brief = crate::worker::render_task_brief(
+                &ticket,
+                &worktree,
+                &paths.prompt,
+                &paths.result_md,
+                feedback,
+            );
+            crate::worker::write_task_brief(&paths, &brief)?;
+            crate::project_config::expand_command(
+                &command,
+                &paths.prompt,
+                Some(&paths.plan),
+                &worktree,
+                ticket_id,
+            )
+        }
+    };
+    let attempt = run_ticket.attempt.saturating_add(1);
+    let env = worker_env(
+        state,
+        ticket_id,
+        &ticket.subject,
+        &run_ticket.claim_id,
+        &worktree,
+        &paths,
+        phase.as_str(),
+        attempt,
+    );
+    let log_dir = Path::new(&state.run_dir).join("workers");
+    let handle = match runner::spawn(&runner::SpawnOptions {
+        ticket_id: ticket_id.to_string(),
+        command,
+        cwd: worktree,
+        env,
+        log_dir,
+    }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            let _ = release_ticket(
+                Path::new(&state.store),
+                ticket_id,
+                &state.run_id,
+                &run_ticket.claim_id,
+                &format!("worker spawn failed: {error:#}"),
+            );
+            return Err(error);
+        }
+    };
+    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+        ticket.status = RunTicketStatus::Running;
+        ticket.phase = Some(phase.run_phase().to_string());
+        ticket.detail = Some(format!("{} worker running", phase.as_str()));
+        ticket.attempt = attempt;
+        ticket.worker = Some(handle);
+        ticket.exit_code = None;
+        ticket.artifact = None;
+        ticket.result = None;
+        ticket.error = None;
+        ticket.finished_at = None;
+        ticket.resume_phase = None;
+    }
+    state.status = RunStatus::Running;
+    save_state(state)?;
+    Ok(())
+}
+
 fn launch_ticket(state: &mut RunState, ticket: &Ticket) -> Result<()> {
     let claim_id = Uuid::new_v4().to_string();
     let claimed = claim_ticket(
@@ -271,12 +434,6 @@ fn launch_ticket(state: &mut RunState, ticket: &Ticket) -> Result<()> {
         &claim_id,
     )?
     .ok_or_else(|| anyhow::anyhow!("ticket {} is no longer claimable", ticket.id))?;
-    let attempt = state
-        .tickets
-        .get(&ticket.id)
-        .map(|ticket| ticket.attempt.saturating_add(1))
-        .unwrap_or(1);
-
     let previous = state.tickets.get(&ticket.id).cloned();
     let tree: WorktreeInfo = match &claimed.suspension {
         Some(suspension) => resume_worktree(
@@ -307,67 +464,49 @@ fn launch_ticket(state: &mut RunState, ticket: &Ticket) -> Result<()> {
             Some(&state.base_ref),
         )?,
     };
-
-    let paths = WorkerPaths::new(Path::new(&state.run_dir), &ticket.id);
-    let brief = render_task_brief(&claimed, &tree.dir, &paths.prompt, &paths.result_md);
-    write_task_brief(&paths, &brief)?;
-    let command = crate::project_config::expand_command(
-        &state.worker_build,
-        &paths.prompt,
-        None,
-        &tree.dir,
-        &ticket.id,
-    );
-    let env = worker_env(
-        state,
-        &ticket.id,
-        &claimed.subject,
-        &claim_id,
-        &tree.dir,
-        &paths,
-        attempt,
-    );
-    let log_dir = Path::new(&state.run_dir).join("workers");
-    let handle = match runner::spawn(&runner::SpawnOptions {
-        ticket_id: ticket.id.clone(),
-        command,
-        cwd: tree.dir.clone(),
-        env,
-        log_dir,
+    let phase = match previous.as_ref().and_then(|previous| {
+        previous
+            .resume_phase
+            .as_deref()
+            .or(previous.phase.as_deref())
     }) {
-        Ok(handle) => handle,
-        Err(error) => {
-            let _ = release_ticket(
-                Path::new(&state.store),
-                &ticket.id,
-                &state.run_id,
-                &claim_id,
-                &format!("worker spawn failed: {error:#}"),
-            );
-            return Err(error);
-        }
+        Some(PHASE_BUILDING) | Some(PHASE_AWAITING_REVIEW) => Phase::Build,
+        Some(PHASE_PLANNING) | Some(PHASE_AWAITING_PLAN) => Phase::Plan,
+        _ if state.worker_plan.is_some() => Phase::Plan,
+        _ => Phase::Build,
     };
-
     state.tickets.insert(
         ticket.id.clone(),
         RunTicketState {
-            status: RunTicketStatus::Running,
-            claim_id,
+            status: RunTicketStatus::Starting,
+            claim_id: claim_id.clone(),
             model: None,
             worktree: tree.dir.display().to_string(),
             branch: tree.branch,
             base_head: tree.base_head,
-            phase: Some("building".to_string()),
-            detail: Some("worker running".to_string()),
+            phase: None,
+            detail: Some("starting".to_string()),
             started_at: now_iso(),
             finished_at: None,
-            attempt,
-            worker: Some(handle),
+            attempt: previous.as_ref().map(|ticket| ticket.attempt).unwrap_or(0),
+            exit_code: None,
+            artifact: None,
+            resume_phase: None,
+            worker: None,
             result: None,
             error: None,
         },
     );
-    save_state(state)?;
+    if let Err(error) = spawn_phase(state, &ticket.id, phase, None) {
+        let _ = release_ticket(
+            Path::new(&state.store),
+            &ticket.id,
+            &state.run_id,
+            &claim_id,
+            &format!("phase launch failed: {error:#}"),
+        );
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -445,6 +584,9 @@ fn launch_ready(state: &mut RunState) -> Result<()> {
                     started_at: now_iso(),
                     finished_at: Some(now_iso()),
                     attempt: 1,
+                    exit_code: None,
+                    artifact: None,
+                    resume_phase: None,
                     worker: None,
                     result: None,
                     error: Some(format!("{error:#}")),
@@ -456,6 +598,107 @@ fn launch_ready(state: &mut RunState) -> Result<()> {
     Ok(())
 }
 
+fn write_ticket_artifact(
+    state: &RunState,
+    ticket_id: &str,
+    run_ticket: &RunTicketState,
+    phase: &str,
+    exit_code: Option<i32>,
+    error: Option<&str>,
+    result: Option<&Value>,
+) -> Result<Value> {
+    let paths = WorkerPaths::new(Path::new(&state.run_dir), ticket_id);
+    let worktree = Path::new(&run_ticket.worktree);
+    let head = git(worktree, &["rev-parse", "HEAD"]).unwrap_or_default();
+    let diff = if phase == PHASE_BUILDING && !run_ticket.base_head.is_empty() {
+        git(
+            worktree,
+            &["diff", &format!("{}...HEAD", run_ticket.base_head)],
+        )
+        .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    if !diff.is_empty() {
+        fs::write(&paths.diff, &diff).with_context(|| format!("write {}", paths.diff.display()))?;
+    }
+    let artifact = json!({
+        "schemaVersion": 1,
+        "runId": state.run_id,
+        "ticketId": ticket_id,
+        "attempt": run_ticket.attempt,
+        "phase": phase,
+        "command": run_ticket.worker.as_ref().map(|worker| worker.command.clone()),
+        "branch": run_ticket.branch,
+        "baseHead": run_ticket.base_head,
+        "head": head,
+        "startedAt": run_ticket.started_at,
+        "finishedAt": now_iso(),
+        "exitCode": exit_code,
+        "error": error,
+        "result": result,
+        "artifacts": {
+            "plan": paths.plan.display().to_string(),
+            "result": paths.result_md.display().to_string(),
+            "diff": paths.diff.display().to_string(),
+            "log": paths.log.display().to_string(),
+            "snapshots": paths.artifacts.display().to_string(),
+        }
+    });
+    let text = serde_json::to_string_pretty(&artifact)? + "\n";
+    fs::write(&paths.artifact, &text)
+        .with_context(|| format!("write {}", paths.artifact.display()))?;
+    fs::create_dir_all(&paths.artifacts)
+        .with_context(|| format!("create {}", paths.artifacts.display()))?;
+    let snapshot = paths
+        .artifacts
+        .join(format!("{}-{}.json", phase, run_ticket.attempt));
+    fs::write(&snapshot, text).with_context(|| format!("write {}", snapshot.display()))?;
+    Ok(artifact)
+}
+
+fn fail_run_ticket(
+    state: &mut RunState,
+    ticket_id: &str,
+    run_ticket: &RunTicketState,
+    phase: &str,
+    message: String,
+    exit_code: Option<i32>,
+    result: Option<&crate::worker::WorkerResult>,
+) -> Result<()> {
+    let result_value = result.and_then(|result| serde_json::to_value(result).ok());
+    let artifact = write_ticket_artifact(
+        state,
+        ticket_id,
+        run_ticket,
+        phase,
+        exit_code,
+        Some(&message),
+        result_value.as_ref(),
+    )?;
+    let _ = finish_ticket(
+        Path::new(&state.store),
+        ticket_id,
+        &state.run_id,
+        &run_ticket.claim_id,
+        TicketStatus::Failed,
+        result_value.unwrap_or_else(|| json!({"status": "failed", "summary": message})),
+        Some(message.clone()),
+    );
+    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+        ticket.status = RunTicketStatus::Failed;
+        ticket.phase = Some("failed".to_string());
+        ticket.detail = Some("worker failed".to_string());
+        ticket.finished_at = Some(now_iso());
+        ticket.exit_code = exit_code;
+        ticket.artifact = Some(artifact);
+        ticket.error = Some(message);
+        ticket.resume_phase = Some(phase.to_string());
+    }
+    save_state(state)?;
+    Ok(())
+}
+
 fn settle_worker(state: &mut RunState, ticket_id: &str) -> Result<()> {
     let Some(run_ticket) = state.tickets.get(ticket_id).cloned() else {
         return Ok(());
@@ -463,106 +706,184 @@ fn settle_worker(state: &mut RunState, ticket_id: &str) -> Result<()> {
     if run_ticket.status != RunTicketStatus::Running {
         return Ok(());
     }
+    let phase = run_ticket.phase.clone().unwrap_or_default();
     let paths = WorkerPaths::new(Path::new(&state.run_dir), ticket_id);
     let result = match read_result(&paths, ticket_id, &state.run_id, &run_ticket.claim_id)? {
         Some(result) => result,
         None => {
-            if let Some(worker) = &run_ticket.worker
-                && !runner::is_running(worker.pid)
-            {
-                let tail = runner::tail(Path::new(&worker.log), 20);
-                let message = if tail.is_empty() {
-                    "worker exited without RESULT.md".to_string()
-                } else {
-                    format!("worker exited without RESULT.md\n{tail}")
-                };
-                let _ = finish_ticket(
-                    Path::new(&state.store),
-                    ticket_id,
-                    &state.run_id,
-                    &run_ticket.claim_id,
-                    TicketStatus::Failed,
-                    json!({"status": "failed", "summary": message}),
-                    Some(message.clone()),
-                );
-                if let Some(ticket) = state.tickets.get_mut(ticket_id) {
-                    ticket.status = RunTicketStatus::Failed;
-                    ticket.phase = Some("failed".to_string());
-                    ticket.detail = Some("worker exited without result".to_string());
-                    ticket.finished_at = Some(now_iso());
-                    ticket.error = Some(message);
-                }
-                save_state(state)?;
-            } else if let Some(worker_state) = read_state(&paths) {
-                let phase = worker_state
-                    .get("phase")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let detail = worker_state
-                    .get("detail")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                if phase != run_ticket.phase || detail != run_ticket.detail {
-                    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
-                        ticket.phase = phase;
-                        ticket.detail = detail;
+            let mut exit_code = None;
+            if let Some(worker) = &run_ticket.worker {
+                match runner::poll(worker.pid) {
+                    runner::ProcessState::Running => {
+                        if let Some(worker_state) = read_state(&paths) {
+                            let next_phase = worker_state
+                                .get("phase")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            let detail = worker_state
+                                .get("detail")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            if next_phase != run_ticket.phase || detail != run_ticket.detail {
+                                if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+                                    ticket.phase = next_phase;
+                                    ticket.detail = detail;
+                                }
+                                save_state(state)?;
+                            }
+                        }
+                        return Ok(());
                     }
-                    save_state(state)?;
+                    runner::ProcessState::Exited(code) => exit_code = code,
+                    runner::ProcessState::Gone => {}
                 }
             }
-            return Ok(());
+            let tail = run_ticket
+                .worker
+                .as_ref()
+                .map(|worker| runner::tail(Path::new(&worker.log), 20))
+                .unwrap_or_default();
+            let message = if tail.is_empty() {
+                "worker exited without RESULT.md".to_string()
+            } else {
+                format!("worker exited without RESULT.md\n{tail}")
+            };
+            return fail_run_ticket(
+                state,
+                ticket_id,
+                &run_ticket,
+                &phase,
+                message,
+                exit_code,
+                None,
+            );
         }
     };
     if !result.claim_id.is_empty() && result.claim_id != run_ticket.claim_id {
         return Ok(());
     }
-    let status = match result.status {
-        WorkerResultStatus::Done => {
-            if !worktree_is_clean(Path::new(&run_ticket.worktree))? {
-                let message = "worker reported done but left uncommitted changes".to_string();
-                finish_ticket(
-                    Path::new(&state.store),
-                    ticket_id,
-                    &state.run_id,
-                    &run_ticket.claim_id,
-                    TicketStatus::Failed,
-                    serde_json::to_value(&result)?,
-                    Some(message.clone()),
-                )?;
-                RunTicketStatus::Failed
-            } else {
-                finish_ticket(
-                    Path::new(&state.store),
-                    ticket_id,
-                    &state.run_id,
-                    &run_ticket.claim_id,
-                    TicketStatus::Done,
-                    serde_json::to_value(&result)?,
-                    None,
-                )?
-                .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} claim changed before finish"))?;
-                RunTicketStatus::Done
+    let mut exit_code = None;
+    if let Some(worker) = &run_ticket.worker {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match runner::poll(worker.pid) {
+                runner::ProcessState::Running if Instant::now() < deadline => {
+                    sleep(Duration::from_millis(25));
+                }
+                runner::ProcessState::Exited(code) => {
+                    exit_code = code;
+                    break;
+                }
+                _ => break,
             }
         }
-        WorkerResultStatus::Failed => {
-            finish_ticket(
-                Path::new(&state.store),
-                ticket_id,
-                &state.run_id,
-                &run_ticket.claim_id,
-                TicketStatus::Failed,
-                serde_json::to_value(&result)?,
-                result.summary.clone(),
-            )?;
-            RunTicketStatus::Failed
+        let _ = runner::stop(worker.pid, Duration::from_secs(2));
+    }
+    let result_value = serde_json::to_value(&result)?;
+    match result.status {
+        WorkerResultStatus::Done => {
+            if !worktree_is_clean(Path::new(&run_ticket.worktree))? {
+                return fail_run_ticket(
+                    state,
+                    ticket_id,
+                    &run_ticket,
+                    &phase,
+                    "worker reported done but left uncommitted changes".to_string(),
+                    exit_code,
+                    Some(&result),
+                );
+            }
+            match phase.as_str() {
+                PHASE_PLANNING => {
+                    let plan = fs::read_to_string(&paths.plan).unwrap_or_default();
+                    if plan.trim().is_empty() {
+                        return fail_run_ticket(
+                            state,
+                            ticket_id,
+                            &run_ticket,
+                            &phase,
+                            "plan worker reported done but PLAN.md is empty".to_string(),
+                            exit_code,
+                            Some(&result),
+                        );
+                    }
+                    let artifact = write_ticket_artifact(
+                        state,
+                        ticket_id,
+                        &run_ticket,
+                        &phase,
+                        exit_code,
+                        None,
+                        Some(&result_value),
+                    )?;
+                    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+                        ticket.status = RunTicketStatus::AwaitingPlan;
+                        ticket.phase = Some(PHASE_AWAITING_PLAN.to_string());
+                        ticket.detail = Some("plan ready for review".to_string());
+                        ticket.finished_at = None;
+                        ticket.exit_code = exit_code;
+                        ticket.artifact = Some(artifact);
+                        ticket.result = Some(result_value);
+                        ticket.error = None;
+                        ticket.resume_phase = Some(PHASE_PLANNING.to_string());
+                    }
+                    save_state(state)?;
+                    Ok(())
+                }
+                PHASE_BUILDING => {
+                    let artifact = write_ticket_artifact(
+                        state,
+                        ticket_id,
+                        &run_ticket,
+                        &phase,
+                        exit_code,
+                        None,
+                        Some(&result_value),
+                    )?;
+                    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+                        ticket.status = RunTicketStatus::AwaitingReview;
+                        ticket.phase = Some(PHASE_AWAITING_REVIEW.to_string());
+                        ticket.detail = Some("changes ready for review".to_string());
+                        ticket.finished_at = None;
+                        ticket.exit_code = exit_code;
+                        ticket.artifact = Some(artifact);
+                        ticket.result = Some(result_value);
+                        ticket.error = None;
+                        ticket.resume_phase = Some(PHASE_BUILDING.to_string());
+                    }
+                    save_state(state)?;
+                    Ok(())
+                }
+                _ => fail_run_ticket(
+                    state,
+                    ticket_id,
+                    &run_ticket,
+                    &phase,
+                    format!("worker finished in unexpected phase {phase}"),
+                    exit_code,
+                    Some(&result),
+                ),
+            }
         }
+        WorkerResultStatus::Failed => fail_run_ticket(
+            state,
+            ticket_id,
+            &run_ticket,
+            &phase,
+            result
+                .summary
+                .clone()
+                .unwrap_or_else(|| "worker reported failed".to_string()),
+            exit_code,
+            Some(&result),
+        ),
         WorkerResultStatus::Blocked | WorkerResultStatus::NeedsInput => {
             let blockers = if result.status == WorkerResultStatus::Blocked {
                 result.blockers.clone()
             } else {
                 Vec::new()
             };
-            suspend_ticket(
+            if let Err(error) = suspend_ticket(
                 Path::new(&state.store),
                 ticket_id,
                 &state.run_id,
@@ -575,34 +896,41 @@ fn settle_worker(state: &mut RunState, ticket_id: &str) -> Result<()> {
                     branch: run_ticket.branch.clone(),
                     base_head: run_ticket.base_head.clone(),
                 },
-            )?;
-            RunTicketStatus::Blocked
-        }
-    };
-    if let Some(worker) = &run_ticket.worker {
-        let _ = runner::stop(worker.pid, Duration::from_secs(2));
-    }
-    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
-        ticket.status = status;
-        ticket.phase = Some(
-            match status {
-                RunTicketStatus::Done => "done",
-                RunTicketStatus::Blocked => "blocked",
-                RunTicketStatus::Failed => "failed",
-                _ => "settled",
+            ) {
+                return fail_run_ticket(
+                    state,
+                    ticket_id,
+                    &run_ticket,
+                    &phase,
+                    format!("suspend failed: {error:#}"),
+                    exit_code,
+                    Some(&result),
+                );
             }
-            .to_string(),
-        );
-        ticket.finished_at = Some(now_iso());
-        ticket.result = Some(serde_json::to_value(&result)?);
-        ticket.error = if status == RunTicketStatus::Failed {
-            result.summary.clone()
-        } else {
-            None
-        };
+            let artifact = write_ticket_artifact(
+                state,
+                ticket_id,
+                &run_ticket,
+                &phase,
+                exit_code,
+                None,
+                Some(&result_value),
+            )?;
+            if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+                ticket.status = RunTicketStatus::Blocked;
+                ticket.phase = Some("blocked".to_string());
+                ticket.detail = result.summary.clone();
+                ticket.finished_at = Some(now_iso());
+                ticket.exit_code = exit_code;
+                ticket.artifact = Some(artifact);
+                ticket.result = Some(result_value);
+                ticket.error = None;
+                ticket.resume_phase = Some(phase);
+            }
+            save_state(state)?;
+            Ok(())
+        }
     }
-    save_state(state)?;
-    Ok(())
 }
 
 fn deadline_exceeded(ticket: &RunTicketState, max_seconds: Option<u64>) -> bool {
@@ -686,6 +1014,9 @@ fn reconcile_claims(state: &mut RunState) -> Result<()> {
                 started_at: now_iso(),
                 finished_at: None,
                 attempt: 1,
+                exit_code: None,
+                artifact: None,
+                resume_phase: None,
                 worker,
                 result: None,
                 error: None,
@@ -713,6 +1044,7 @@ fn run_is_settled(state: &RunState) -> bool {
         && matches!(
             state.status,
             RunStatus::Planned
+                | RunStatus::Awaiting
                 | RunStatus::Done
                 | RunStatus::Blocked
                 | RunStatus::Stopped
@@ -754,10 +1086,18 @@ pub fn monitor_once(run_dir: &Path, max_parallel: u32) -> Result<RunState> {
         })
         .collect();
     if !active && remaining.is_empty() {
+        let awaiting = state.tickets.values().any(|ticket| {
+            matches!(
+                ticket.status,
+                RunTicketStatus::AwaitingPlan | RunTicketStatus::AwaitingReview
+            )
+        });
         let open = tickets
             .iter()
             .any(|ticket| matches!(ticket.status, TicketStatus::Todo | TicketStatus::InProgress));
-        state.status = if open {
+        state.status = if awaiting {
+            RunStatus::Awaiting
+        } else if open {
             RunStatus::Blocked
         } else {
             RunStatus::Done
@@ -982,6 +1322,175 @@ pub fn close_run(run_dir: &Path) -> Result<RunState> {
     release_run_claims(Path::new(&state.store), &state.run_id);
     state.status = RunStatus::Closed;
     save_state(&mut state)?;
+    Ok(state)
+}
+
+fn merge_ticket(state: &mut RunState, ticket_id: &str) -> Result<()> {
+    let run_ticket = state
+        .tickets
+        .get(ticket_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} is not in run state"))?;
+    let repo = Path::new(&state.repo);
+    let base_branch = state
+        .base_ref
+        .strip_prefix("origin/")
+        .unwrap_or(&state.base_ref);
+    let current = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if current != base_branch {
+        bail!(
+            "refusing to merge: {base_branch} must be checked out in {} (current: {current})",
+            repo.display()
+        );
+    }
+    if !git(repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
+        bail!(
+            "refusing to merge: {} has uncommitted changes",
+            repo.display()
+        );
+    }
+    let output = Command::new("git")
+        .args(["merge", "--no-ff", "--no-commit", &run_ticket.branch])
+        .current_dir(repo)
+        .output()
+        .with_context(|| format!("run git merge {}", run_ticket.branch))?;
+    if !output.status.success() {
+        let _ = Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(repo)
+            .status();
+        let message = format!(
+            "merge conflict for {ticket_id}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+            ticket.phase = Some("merge_conflict".to_string());
+            ticket.error = Some(message.clone());
+        }
+        save_state(state)?;
+        bail!("{message}");
+    }
+    let commit = Command::new("git")
+        .args([
+            "commit",
+            "-m",
+            &format!("lyra: merge {ticket_id} ({})", state.run_id),
+        ])
+        .current_dir(repo)
+        .output()
+        .with_context(|| "commit merge")?;
+    if !commit.status.success() {
+        let _ = Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(repo)
+            .status();
+        bail!(
+            "merge commit failed for {ticket_id}: {}",
+            String::from_utf8_lossy(&commit.stderr).trim()
+        );
+    }
+    let result = run_ticket
+        .result
+        .clone()
+        .unwrap_or_else(|| json!({"status": "done", "summary": "approved and merged"}));
+    finish_ticket(
+        Path::new(&state.store),
+        ticket_id,
+        &state.run_id,
+        &run_ticket.claim_id,
+        TicketStatus::Done,
+        result.clone(),
+        None,
+    )?
+    .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} claim changed before merge"))?;
+    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+        ticket.status = RunTicketStatus::Done;
+        ticket.phase = Some("done".to_string());
+        ticket.detail = Some("approved and merged".to_string());
+        ticket.finished_at = Some(now_iso());
+        ticket.error = None;
+        ticket.result = Some(result);
+        ticket.resume_phase = None;
+    }
+    save_state(state)?;
+    Ok(())
+}
+
+fn approve_without_merge(state: &mut RunState, ticket_id: &str) -> Result<()> {
+    let run_ticket = state
+        .tickets
+        .get(ticket_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} is not in run state"))?;
+    let result = run_ticket
+        .result
+        .clone()
+        .unwrap_or_else(|| json!({"status": "done", "summary": "approved without merge"}));
+    finish_ticket(
+        Path::new(&state.store),
+        ticket_id,
+        &state.run_id,
+        &run_ticket.claim_id,
+        TicketStatus::Done,
+        result.clone(),
+        None,
+    )?
+    .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} claim changed before approval"))?;
+    if let Some(ticket) = state.tickets.get_mut(ticket_id) {
+        ticket.status = RunTicketStatus::Done;
+        ticket.phase = Some("done".to_string());
+        ticket.detail = Some("approved without merge".to_string());
+        ticket.finished_at = Some(now_iso());
+        ticket.error = None;
+        ticket.result = Some(result);
+        ticket.resume_phase = None;
+    }
+    save_state(state)?;
+    Ok(())
+}
+
+pub fn approve_ticket(run_dir: &Path, ticket_id: &str, merge: bool) -> Result<RunState> {
+    let mut state = load_state(run_dir)?;
+    let ticket = state
+        .tickets
+        .get(ticket_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} is not part of this run"))?;
+    match ticket.status {
+        RunTicketStatus::AwaitingPlan => {
+            spawn_phase(&mut state, ticket_id, Phase::Build, None)?;
+        }
+        RunTicketStatus::AwaitingReview => {
+            if merge {
+                merge_ticket(&mut state, ticket_id)?;
+            } else {
+                approve_without_merge(&mut state, ticket_id)?;
+            }
+        }
+        other => bail!(
+            "ticket {ticket_id} is not at a gate (status: {})",
+            other.as_str()
+        ),
+    }
+    Ok(state)
+}
+
+pub fn reject_ticket(run_dir: &Path, ticket_id: &str, note: &str) -> Result<RunState> {
+    let mut state = load_state(run_dir)?;
+    let ticket = state
+        .tickets
+        .get(ticket_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("ticket {ticket_id} is not part of this run"))?;
+    let phase = match ticket.status {
+        RunTicketStatus::AwaitingPlan => Phase::Plan,
+        RunTicketStatus::AwaitingReview => Phase::Build,
+        other => bail!(
+            "ticket {ticket_id} is not at a gate (status: {})",
+            other.as_str()
+        ),
+    };
+    spawn_phase(&mut state, ticket_id, phase, Some(note))?;
     Ok(state)
 }
 

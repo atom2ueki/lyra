@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use crate::acceptance::validate_acceptance_paths;
 use crate::agent::{RunSummary, TicketSummary, WaitSummary, build_status};
 use crate::conductor::{
-    MonitorOptions, RunState, StartOptions, WaitOptions, WaitOutcome, close_run, latest_run_dir,
-    load_state, monitor_run, run_dir_for, start_run, stop_run, wait_run,
+    MonitorOptions, RunState, StartOptions, WaitOptions, WaitOutcome, approve_ticket, close_run,
+    latest_run_dir, load_state, monitor_run, reject_ticket, run_dir_for, start_run, stop_run,
+    wait_run,
 };
 use crate::graph::{to_dot, to_json, to_mermaid};
 use crate::project::{current_project, project_id_for, store_dir_for};
@@ -127,6 +128,31 @@ enum Command {
     },
     /// Stop running workers and release their claims.
     Stop {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        concise: bool,
+    },
+    /// Approve a plan gate or a review gate.
+    Approve {
+        ticket: String,
+        #[arg(long)]
+        run: Option<String>,
+        /// Mark done without merging the branch into the base branch.
+        #[arg(long = "no-merge")]
+        no_merge: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        concise: bool,
+    },
+    /// Reject a gate with a note; the worker re-runs that phase with feedback.
+    Reject {
+        ticket: String,
+        #[arg(long)]
+        note: String,
         #[arg(long)]
         run: Option<String>,
         #[arg(long)]
@@ -745,6 +771,28 @@ pub fn run() -> Result<()> {
         Some(Command::Stop { run, json, concise }) => {
             let context = resolve_store(None, None)?;
             let state = stop_run(&resolve_run_dir(&context.root, run)?)?;
+            print_run(&state, json, concise)
+        }
+        Some(Command::Approve {
+            ticket,
+            run,
+            no_merge,
+            json,
+            concise,
+        }) => {
+            let context = resolve_store(None, None)?;
+            let state = approve_ticket(&resolve_run_dir(&context.root, run)?, &ticket, !no_merge)?;
+            print_run(&state, json, concise)
+        }
+        Some(Command::Reject {
+            ticket,
+            note,
+            run,
+            json,
+            concise,
+        }) => {
+            let context = resolve_store(None, None)?;
+            let state = reject_ticket(&resolve_run_dir(&context.root, run)?, &ticket, &note)?;
             print_run(&state, json, concise)
         }
         Some(Command::Close { run, json, concise }) => {

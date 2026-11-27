@@ -228,12 +228,21 @@ impl RunSummary {
     pub fn needs_input(&self) -> bool {
         self.tickets.iter().any(|ticket| ticket.needs_input)
     }
+
+    pub fn has_gate(&self) -> bool {
+        self.tickets
+            .iter()
+            .any(|ticket| matches!(ticket.status.as_str(), "awaiting_plan" | "awaiting_review"))
+    }
 }
 
 pub fn next_action(graph: &GraphSummary, run: Option<&RunSummary>) -> &'static str {
     if let Some(run) = run {
         if run.needs_input() {
             return "resolve_input";
+        }
+        if run.has_gate() {
+            return "review";
         }
         if run.has_active() {
             return "wait";

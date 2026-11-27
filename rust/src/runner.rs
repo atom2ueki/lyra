@@ -102,14 +102,29 @@ fn try_reap(pid: u32) -> Option<i32> {
     Some(-1)
 }
 
-pub fn is_running(pid: u32) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessState {
+    Running,
+    Exited(Option<i32>),
+    Gone,
+}
+
+pub fn poll(pid: u32) -> ProcessState {
     if pid == 0 {
-        return false;
+        return ProcessState::Gone;
     }
-    if try_reap(pid).is_some() {
-        return false;
+    if let Some(code) = try_reap(pid) {
+        return ProcessState::Exited(Some(code));
     }
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    if unsafe { libc::kill(pid as libc::pid_t, 0) == 0 } {
+        ProcessState::Running
+    } else {
+        ProcessState::Gone
+    }
+}
+
+pub fn is_running(pid: u32) -> bool {
+    matches!(poll(pid), ProcessState::Running)
 }
 
 /// Send SIGTERM, wait up to `grace`, then SIGKILL. Safe to call on an already

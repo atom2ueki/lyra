@@ -17,8 +17,8 @@ The 0.7 core is deliberately small:
 - **Worktrees** — one isolated branch/worktree per ticket, safe parallel execution.
 - **Generic process runner** — a worker is a command. No pane backend, no harness registry.
 - **File contract** — `TASK.md`, `RESULT.md`, `worker.log`. Any agent CLI can be a worker.
-- **Human gates** — plan and review are the next layer; the core already parks `needs_input`
-  and keeps the worktree for resume.
+- **Human gates** — optional plan gate, mandatory review gate, `approve` / `reject`, merge
+  conflict detection, and feedback turns.
 
 Tool-specific integrations are adapters, not core. OMP, Claude Code, Codex, or any other CLI is
 selected by the project's worker command.
@@ -59,6 +59,8 @@ lyra tickets list --details
 lyra status
 lyra start --max 2
 lyra monitor --once
+lyra approve QuietHarbor
+lyra reject QuietHarbor --note "keep the old cookie fallback"
 lyra wait --timeout-ms 30000
 lyra report
 lyra logs QuietHarbor
@@ -97,7 +99,18 @@ Each worker gets:
 - `workers/<ticket>/worker.log` for stdout/stderr,
 - environment variables `LYRA_RUN_ID`, `LYRA_TICKET_ID`, `LYRA_TICKET_SUBJECT`,
   `LYRA_CLAIM_ID`, `LYRA_WORKTREE`, `LYRA_PROMPT_FILE`, `LYRA_RESULT_FILE`,
-  `LYRA_PLAN_FILE`, `LYRA_DIFF_FILE`, and `LYRA_ATTEMPT`.
+  `LYRA_PLAN_FILE`, `LYRA_DIFF_FILE`, `LYRA_PHASE`, and `LYRA_ATTEMPT`.
+
+If `[worker].plan` is configured, the plan command runs first and writes `PLAN.md` plus
+`RESULT.md`. The ticket parks at `AwaitingPlan`; `lyra approve <ticket>` starts the build,
+`lyra reject <ticket> --note ...` re-runs the plan with feedback. If `plan` is omitted, the build
+starts immediately.
+
+The build command runs in the same worktree. When it reports `done`, Lyra writes `DIFF.patch` and
+parks at `AwaitingReview`. `lyra approve <ticket>` merges the branch into the base branch (or
+`--no-merge` marks it done without merging), and `lyra reject <ticket> --note ...` re-runs the
+build with `FEEDBACK.md`. A merge is refused unless the base branch is checked out and clean; a
+conflict aborts the merge and leaves the ticket at `AwaitingReview` with `phase: merge_conflict`.
 
 A worker finishes by committing its work and writing:
 
@@ -112,6 +125,11 @@ blockers: <comma-separated ticket ids, blocked only>
 worktree for resume. `needs_input` parks the ticket and keeps the worktree. `failed` is retried
 up to 3 attempts in the same worktree.
 
+Every worker run also writes `ARTIFACT.json` with `runId`, `ticketId`, `attempt`, `phase`,
+`command`, `branch`, `baseHead`, `head`, `startedAt`, `finishedAt`, `exitCode`, `error`, and the
+artifact paths (`PLAN.md`, `RESULT.md`, `DIFF.patch`, `worker.log`). Per-phase snapshots
+live in `workers/<ticket>/artifacts/<phase>-<attempt>.json`.
+
 The conductor owns the store, claims, attempt state, and worktrees. A worker never edits the
 ticket store or another worktree.
 
@@ -122,12 +140,12 @@ rust/src/
   schema.rs        ticket/run schema + validation
   store.rs         tickets, claims, events, retry requeue
   graph.rs         ready/blocked graph projections
-  conductor.rs     scheduler, attempts, settle, stop/close
+  conductor.rs     scheduler, plan/review gates, merge, attempts, artifacts
   runner.rs        process spawn, status, SIGTERM/SIGKILL, logs
-  worker.rs        TASK.md / RESULT.md contract
+  worker.rs        TASK.md / RESULT.md / PLAN.md contract
   worktree.rs      isolated branches and cleanup
   project_config.rs  lyra.toml
-  cli.rs           init/add/tickets/start/monitor/wait/stop/report/logs/close
+  cli.rs           init/add/tickets/start/monitor/approve/reject/wait/stop/report/logs/close
 ```
 
 There is no pane backend, harness registry, model policy, OMP extension, or import adapter in the
@@ -136,7 +154,6 @@ core. Those were removed in the 0.7 refactor; a worker command is the integratio
 ## Non-goals for 0.7 core
 
 - Board UI / local web server (next layer)
-- Plan and review gates (next layer; `needs_input` is already parked)
 - Team / multi-user / auth
 - Remote machines / cloud sandboxes
 - OMP, Claude Code, Codex, or MCP adapters
