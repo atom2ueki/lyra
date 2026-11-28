@@ -361,7 +361,12 @@ fn review_reject_reruns_build_with_feedback() {
             .exists()
     );
 
-    approve_ticket(Path::new(&started.run_dir), &alpha, true).unwrap();
+    let approved = approve_ticket(Path::new(&started.run_dir), &alpha, true).unwrap();
+    assert_eq!(
+        approved.status,
+        RunStatus::Running,
+        "merge must hand the run back to the monitor"
+    );
     let state = drive(Path::new(&started.run_dir), Duration::from_secs(15));
     assert_eq!(state.status, RunStatus::Done);
     assert_eq!(state.tickets[&alpha].status, RunTicketStatus::Done);
