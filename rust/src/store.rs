@@ -329,6 +329,37 @@ pub struct SuspendArgs {
 
 /// Put a failed ticket back in the ready pool for an explicit retry. The
 /// attempt counter stays in the store; `claim_ticket` increments it again.
+/// Close a ticket that should not run: an obsolete or superseded task.
+/// Only todo/failed/blocked tickets can be closed; a worker-held ticket must
+/// be stopped first, and completed history is immutable.
+pub fn close_ticket(store: &Path, id: &str) -> Result<Option<Ticket>> {
+    let Some(mut ticket) = read_ticket(store, id)? else {
+        return Ok(None);
+    };
+    match ticket.status {
+        TicketStatus::Closed => return Ok(Some(ticket)),
+        TicketStatus::Todo | TicketStatus::Failed => {}
+        TicketStatus::InProgress => {
+            anyhow::bail!("{id} is in_progress and cannot be closed while a worker holds it")
+        }
+        TicketStatus::Done => anyhow::bail!("{id} is done and cannot be closed"),
+    }
+    let now = now_iso();
+    ticket.status = TicketStatus::Closed;
+    ticket.execution = None;
+    ticket.suspension = None;
+    ticket.result = None;
+    ticket.last_error = None;
+    ticket.finished_at = Some(now.clone());
+    ticket.updated_at = now;
+    write_ticket(store, &ticket)?;
+    append_event(
+        store,
+        json!({"type": "ticket.closed", "ticketId": id, "subject": ticket.subject}),
+    )?;
+    Ok(Some(ticket))
+}
+
 pub fn requeue_ticket(store: &Path, id: &str) -> Result<Option<Ticket>> {
     let Some(mut ticket) = read_ticket(store, id)? else {
         return Ok(None);

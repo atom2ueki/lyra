@@ -415,7 +415,7 @@
 
   function columnOf(ticket) {
     const status = statusOf(ticket);
-    if (ticket.status === 'done' || status === 'done') return 'done';
+    if (ticket.status === 'done' || ticket.status === 'closed' || status === 'done' || status === 'closed') return 'done';
     if (['awaiting_plan', 'awaiting_review', 'awaitingplan', 'awaitingreview', 'blocked', 'failed'].includes(status) || ticket.status === 'failed') return 'needs';
     if (['starting', 'running'].includes(status)) return 'running';
     return 'backlog';
@@ -423,7 +423,7 @@
 
   function statusLabel(status) {
     return ({
-      todo: 'Backlog', in_progress: 'In progress', done: 'Done', failed: 'Failed',
+      todo: 'Backlog', in_progress: 'In progress', done: 'Done', failed: 'Failed', closed: 'Closed',
       starting: 'Starting', running: 'Running', awaiting_plan: 'Plan ready',
       awaiting_review: 'Review ready', blocked: 'Needs input', stopped: 'Stopped',
       planned: 'Planned', awaiting: 'Awaiting', idle: 'Idle',

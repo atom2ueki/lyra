@@ -144,6 +144,7 @@ fn board_state(context: &BoardContext) -> Result<Value> {
             crate::schema::TicketStatus::InProgress => "in_progress",
             crate::schema::TicketStatus::Done => "done",
             crate::schema::TicketStatus::Failed => "failed",
+            crate::schema::TicketStatus::Closed => "closed",
         };
         *counts.entry(key).or_insert(0u64) += 1;
     }
@@ -152,6 +153,7 @@ fn board_state(context: &BoardContext) -> Result<Value> {
         "in_progress": counts.get("in_progress").copied().unwrap_or(0),
         "done": counts.get("done").copied().unwrap_or(0),
         "failed": counts.get("failed").copied().unwrap_or(0),
+        "closed": counts.get("closed").copied().unwrap_or(0),
     });
     Ok(json!({
         "project": {

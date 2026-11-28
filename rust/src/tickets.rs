@@ -307,6 +307,7 @@ pub fn update_ticket(store: &Path, id: &str, update: TicketUpdate) -> Result<Tic
             bail!("{id} is in_progress and cannot be updated while a worker holds it")
         }
         TicketStatus::Done => bail!("{id} is done and cannot be updated; history is immutable"),
+        TicketStatus::Closed => bail!("{id} is closed and cannot be updated"),
     }
     if ticket.suspension.is_some() {
         bail!("{id} is suspended and cannot be updated; resume it first");

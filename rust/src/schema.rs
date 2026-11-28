@@ -15,6 +15,7 @@ pub enum TicketStatus {
     InProgress,
     Done,
     Failed,
+    Closed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

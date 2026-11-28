@@ -24,6 +24,7 @@ pub struct GraphSummary {
     pub in_progress: usize,
     pub done: usize,
     pub failed: usize,
+    pub closed: usize,
     pub ready: Vec<TicketSummary>,
     pub blocked: Vec<BlockedTicket>,
     pub errors: Vec<String>,
@@ -94,6 +95,7 @@ pub fn status_for(ticket: &Ticket) -> &'static str {
         TicketStatus::InProgress => "in_progress",
         TicketStatus::Done => "done",
         TicketStatus::Failed => "failed",
+        TicketStatus::Closed => "closed",
     }
 }
 
@@ -149,6 +151,7 @@ impl GraphSummary {
             in_progress: 0,
             done: 0,
             failed: 0,
+            closed: 0,
             ready,
             blocked,
             errors,
@@ -159,6 +162,7 @@ impl GraphSummary {
                 TicketStatus::InProgress => summary.in_progress += 1,
                 TicketStatus::Done => summary.done += 1,
                 TicketStatus::Failed => summary.failed += 1,
+                TicketStatus::Closed => summary.closed += 1,
             }
         }
         summary
@@ -289,6 +293,7 @@ mod tests {
             in_progress: 0,
             done: usize::from(!open && !ready && !blocked),
             failed: 0,
+            closed: 0,
             ready: if ready {
                 vec![TicketSummary {
                     id: "T-001".to_string(),

@@ -90,6 +90,22 @@ fn init_add_status_and_graph_work_without_a_pane_backend() {
     let graph = run(repo.path(), &home, &["graph", "--format", "mermaid"], None);
     assert!(graph.status.success());
     assert!(String::from_utf8_lossy(&graph.stdout).contains("flowchart TD"));
+
+    let closed = json(&run(
+        repo.path(),
+        &home,
+        &["tickets", "close", &id, "--json"],
+        None,
+    ));
+    assert_eq!(closed["status"], "closed");
+    let after = json(&run(
+        repo.path(),
+        &home,
+        &["status", "--json", "--concise"],
+        None,
+    ));
+    assert_eq!(after["graph"]["closed"], 1);
+    assert!(after["graph"]["ready"].as_array().unwrap().is_empty());
 }
 
 #[test]

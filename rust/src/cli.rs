@@ -19,7 +19,9 @@ use crate::runner;
 use crate::schema::{
     PRIORITY_MAX, PRIORITY_MIN, Ticket, TicketStatus, ready_tickets, ticket_map, validate_graph,
 };
-use crate::store::{NewTicket, create_ticket, ensure_store, list_tickets, read_ticket};
+use crate::store::{
+    NewTicket, close_ticket, create_ticket, ensure_store, list_tickets, read_ticket,
+};
 use crate::tickets::{BatchInput, TicketUpdate, create_batch, update_ticket};
 use crate::worker::WorkerPaths;
 
@@ -262,6 +264,13 @@ enum TicketsCommand {
         #[arg(long)]
         json: bool,
     },
+    Close {
+        id: String,
+        #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -309,6 +318,7 @@ fn counts(tickets: &[Ticket]) -> HashMap<&'static str, usize> {
             TicketStatus::InProgress => "in_progress",
             TicketStatus::Done => "done",
             TicketStatus::Failed => "failed",
+            TicketStatus::Closed => "closed",
         };
         *counts.entry(key).or_insert(0) += 1;
     }
@@ -362,6 +372,7 @@ fn print_status(
                 "in_progress": count_map.get("in_progress").copied().unwrap_or(0),
                 "done": count_map.get("done").copied().unwrap_or(0),
                 "failed": count_map.get("failed").copied().unwrap_or(0),
+                "closed": count_map.get("closed").copied().unwrap_or(0),
             },
             "ready": ready,
             "blocked": blocked,
@@ -372,12 +383,13 @@ fn print_status(
         println!("Store:    {}", store.display());
         println!("Project:  {effective_project}");
         println!(
-            "Tickets:  {} (todo {}, in_progress {}, done {}, failed {})",
+            "Tickets:  {} (todo {}, in_progress {}, done {}, failed {}, closed {})",
             tickets.len(),
             count_map.get("todo").copied().unwrap_or(0),
             count_map.get("in_progress").copied().unwrap_or(0),
             count_map.get("done").copied().unwrap_or(0),
             count_map.get("failed").copied().unwrap_or(0),
+            count_map.get("closed").copied().unwrap_or(0),
         );
         println!(
             "Ready:    {}",
@@ -667,6 +679,17 @@ pub fn run() -> Result<()> {
                     for item in &output.created {
                         println!("{}  {}", item.id, item.key);
                     }
+                }
+                Ok(())
+            }
+            TicketsCommand::Close { id, store, json } => {
+                let context = resolve_store(store, None)?;
+                let ticket = close_ticket(&context.store, &id)?
+                    .ok_or_else(|| anyhow::anyhow!("unknown ticket: {id}"))?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&ticket)?);
+                } else {
+                    println!("Closed {}  {}", ticket.id, ticket.subject);
                 }
                 Ok(())
             }

@@ -58,6 +58,7 @@ version, `--force` to reinstall the same version, or `--version 0.1.0` to pin a 
 lyra init
 lyra add "Add rate limiting to the login endpoint"
 lyra tickets list --details
+lyra tickets close QuietHarbor
 lyra status
 lyra start --max 2
 lyra serve --open
