@@ -135,7 +135,7 @@ build = ["sh", "{script}", "build"]
     .unwrap();
 }
 
-fn start(repo: &Path, store: &Path) -> lyra::conductor::RunState {
+fn start_selected(repo: &Path, store: &Path, ticket_ids: Vec<String>) -> lyra::conductor::RunState {
     let config = ProjectConfig::load(repo).unwrap();
     start_run(StartOptions {
         repo: repo.to_path_buf(),
@@ -144,12 +144,16 @@ fn start(repo: &Path, store: &Path) -> lyra::conductor::RunState {
         config,
         max_parallel: None,
         max_seconds: None,
-        ticket_ids: Vec::new(),
+        ticket_ids,
         base_ref: None,
         dry_run: false,
         run_id: Some("run-lifecycle".to_string()),
     })
     .unwrap()
+}
+
+fn start(repo: &Path, store: &Path) -> lyra::conductor::RunState {
+    start_selected(repo, store, Vec::new())
 }
 
 fn monitor(run_dir: &Path) -> lyra::conductor::RunState {
@@ -408,6 +412,27 @@ fn merge_conflict_is_detected_without_landing_the_branch() {
         String::from_utf8_lossy(&status.stdout).trim().is_empty(),
         "merge must be aborted"
     );
+}
+
+#[test]
+fn explicit_selection_does_not_launch_other_ready_tickets() {
+    let repo = repo();
+    let script = worker_script(repo.path());
+    write_config(repo.path(), &script);
+    let store = store_dir_for(repo.path());
+    ensure_store(&store).unwrap();
+    let selected = new_ticket(&store, "Alpha", vec![]);
+    let other = new_ticket(&store, "Beta", vec![]);
+
+    let started = start_selected(repo.path(), &store, vec![selected.clone()]);
+    let state = drive(Path::new(&started.run_dir), Duration::from_secs(20));
+    assert_eq!(state.status, RunStatus::Done);
+    assert!(state.tickets.contains_key(&selected));
+    assert!(!state.tickets.contains_key(&other));
+    let stored = list_tickets(&store).unwrap();
+    let other = stored.iter().find(|ticket| ticket.id == other).unwrap();
+    assert_eq!(other.status, TicketStatus::Todo);
+    assert_eq!(other.attempts, 0);
 }
 
 #[test]

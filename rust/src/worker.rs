@@ -127,8 +127,13 @@ pub fn render_task_brief(
     format!(
         "# Lyra worker: {id}\n\n\
          You are the only worker for ticket {id}.\n\n\
+         ## Task\n\n\
+         {subject}\n\n\
+         {task}\n\n\
+         ## Acceptance\n\n\
+         {acceptance}\n\n\
          - Work in: {worktree}\n\
-         - Read the task: {prompt}\n\
+         - The task file is {prompt}\n\
          - Commit your work on the current branch.\n\
          - Do not edit the Lyra store or any other worktree.\n\n\
          When finished, write {result} with exactly these fields:\n\n\
@@ -137,6 +142,9 @@ pub fn render_task_brief(
          verification: <checks you actually ran>\n\
          blockers: <comma-separated ticket ids, blocked only>\n{feedback}",
         id = ticket.id,
+        subject = ticket.subject,
+        task = ticket.prompt,
+        acceptance = ticket.acceptance.as_deref().unwrap_or("(not specified)"),
         worktree = worktree.display(),
         prompt = prompt_file.display(),
         result = result_file.display(),
@@ -154,10 +162,18 @@ pub fn render_plan_brief(
 ) -> String {
     format!(
         "# Lyra plan task: {id}\n\n\
+         ## Task\n\n\
+         {subject}\n\n\
+         {task}\n\n\
+         ## Acceptance\n\n\
+         {acceptance}\n\n\
          Read {prompt} in {worktree} and write an implementation plan to {plan}.\n\
          Do not modify code. Include files, steps, risks, and verification.\n\
          When done, write {result} with status: done and a one-line summary.\n{feedback}",
         id = ticket.id,
+        subject = ticket.subject,
+        task = ticket.prompt,
+        acceptance = ticket.acceptance.as_deref().unwrap_or("(not specified)"),
         prompt = prompt_file.display(),
         worktree = worktree.display(),
         plan = plan_file.display(),

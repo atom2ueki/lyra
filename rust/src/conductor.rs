@@ -135,6 +135,8 @@ pub struct RunState {
     pub revision: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planned_tickets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selection: Vec<String>,
     #[serde(default)]
     pub tickets: HashMap<String, RunTicketState>,
 }
@@ -542,9 +544,13 @@ fn launch_ready(state: &mut RunState) -> Result<()> {
         return Ok(());
     }
     let tickets = list_tickets(Path::new(&state.store))?;
+    let selection: HashSet<&str> = state.selection.iter().map(String::as_str).collect();
     let ready: Vec<Ticket> = ready_tickets(&tickets)
         .into_iter()
         .filter(|ticket| {
+            if !selection.is_empty() && !selection.contains(ticket.id.as_str()) {
+                return false;
+            }
             if ticket
                 .suspension
                 .as_ref()
@@ -1078,13 +1084,15 @@ pub fn monitor_once(run_dir: &Path, max_parallel: u32) -> Result<RunState> {
     state = load_state(run_dir)?;
     let active = run_has_active(&state);
     let tickets = list_tickets(Path::new(&state.store))?;
+    let selection: HashSet<&str> = state.selection.iter().map(String::as_str).collect();
     let remaining: Vec<&Ticket> = ready_tickets(&tickets)
         .into_iter()
         .filter(|ticket| {
-            !ticket
-                .suspension
-                .as_ref()
-                .is_some_and(|suspension| suspension.needs_input)
+            (selection.is_empty() || selection.contains(ticket.id.as_str()))
+                && !ticket
+                    .suspension
+                    .as_ref()
+                    .is_some_and(|suspension| suspension.needs_input)
         })
         .collect();
     if !active && remaining.is_empty() {
@@ -1094,9 +1102,10 @@ pub fn monitor_once(run_dir: &Path, max_parallel: u32) -> Result<RunState> {
                 RunTicketStatus::AwaitingPlan | RunTicketStatus::AwaitingReview
             )
         });
-        let open = tickets
-            .iter()
-            .any(|ticket| matches!(ticket.status, TicketStatus::Todo | TicketStatus::InProgress));
+        let open = tickets.iter().any(|ticket| {
+            (selection.is_empty() || selection.contains(ticket.id.as_str()))
+                && matches!(ticket.status, TicketStatus::Todo | TicketStatus::InProgress)
+        });
         state.status = if awaiting {
             RunStatus::Awaiting
         } else if open {
@@ -1192,6 +1201,7 @@ pub fn start_run(options: StartOptions) -> Result<RunState> {
         updated_at: now_iso(),
         revision: 0,
         planned_tickets: candidates.iter().map(|ticket| ticket.id.clone()).collect(),
+        selection: options.ticket_ids.clone(),
         tickets: HashMap::new(),
     };
     save_state(&mut state)?;
@@ -1414,6 +1424,7 @@ fn merge_ticket(state: &mut RunState, ticket_id: &str) -> Result<()> {
         ticket.result = Some(result);
         ticket.resume_phase = None;
     }
+    state.status = RunStatus::Running;
     save_state(state)?;
     Ok(())
 }
@@ -1447,6 +1458,7 @@ fn approve_without_merge(state: &mut RunState, ticket_id: &str) -> Result<()> {
         ticket.result = Some(result);
         ticket.resume_phase = None;
     }
+    state.status = RunStatus::Running;
     save_state(state)?;
     Ok(())
 }
@@ -1541,6 +1553,7 @@ mod tests {
             updated_at: now_iso(),
             revision: 0,
             planned_tickets: Vec::new(),
+            selection: Vec::new(),
             tickets: HashMap::new(),
         }
     }

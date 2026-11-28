@@ -455,7 +455,7 @@
     const status = statusOf(ticket);
     const tags = [];
     if (ticket.ready && column === 'backlog') tags.push('<span class="tag ready">ready</span>');
-    if (ticket.blockedBy?.length && !ticket.ready) tags.push(`<span class="tag warn">blocked by ${esc(ticket.blockedBy.join(', '))}</span>`);
+    if (column === 'backlog' && ticket.blockedBy?.length && !ticket.ready) tags.push(`<span class="tag warn">blocked by ${esc(ticket.blockedBy.join(', '))}</span>`);
     if (ticket.labels?.length) tags.push(`<span class="tag">${esc(ticket.labels.join(' · '))}</span>`);
     if (status === 'failed') tags.push('<span class="tag bad">failed</span>');
     if (status === 'awaiting_plan') tags.push('<span class="tag warn">plan</span>');
